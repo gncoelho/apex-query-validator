@@ -2,11 +2,16 @@
   "name": "apex-query-validator",
   "displayName": "apex-query-validator",
   "description": "Validating SOQL/SOSL Queries in Apex Classes Without 'DAO' or 'Test' in Name",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "Guilherme Coelho",
   "icon": "apex-query-validator.jpg",
+  "license": "CC-BY-NC-4.0",
   "engines": {
     "vscode": "^1.93.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gncoelho/apex-query-validator"
   },
   "categories": [
     "Other"
