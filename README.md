@@ -49,3 +49,37 @@ The extension will:
 
 - Visual Studio Code 1.50.0 or higher.
 - Works best when used with Apex development in Salesforce environments.
+
+
+## Steps and information to create a new extension or contribute
+
+### Set up the development environment:
+
+1. Install Node.js
+2. Install Yeoman and the VS Code Extension Generator:
+```
+npm install -g yo generator-code
+```
+### Create a new extension project:
+
+Run the command:
+```
+yo code
+```
+
+Follow the instructions to set up your extension
+
+### Develop your extension:
+
+1. The main file is the `extension.js`
+2. Implement the desired functionality using the VS Code API
+3. Test your extension: Press F5 in VS Code to start a new window with your extension
+
+
+### Package and publish:
+
+Use vsce to package your extension:
+```
+npm install -g vsce
+vsce package
+```
