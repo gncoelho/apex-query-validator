@@ -1,0 +1,37 @@
+{
+  "name": "apex-query-validator",
+  "displayName": "apex-query-validator",
+  "description": "Validating SOQL/SOSL Queries in Apex Classes Without 'DAO' or 'Test' in Name",
+  "version": "0.0.3",
+  "publisher": "Guilherme Coelho",
+  "icon": "apex-query-validator.jpg",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:apex-query-validator.validateSoqlSosl"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [{
+      "command": "apex-query-validator.validateSoqlSosl",
+      "title": "Validate SOQL/SOSL"
+    }]
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.93.0",
+    "@types/mocha": "^10.0.7",
+    "@types/node": "20.x",
+    "eslint": "^9.9.1",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1"
+  }
+}
