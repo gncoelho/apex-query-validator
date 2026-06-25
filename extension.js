@@ -1,5 +1,52 @@
 const vscode = require('vscode');
 
+// Regex SOQL
+const soqlPattern = /\[SELECT\s+.+\s+FROM\s+\w+(\s+WHERE\s+.+)?(\s+GROUP\s+BY\s+.+)?(\s+ORDER\s+BY\s+.+)?(\s+LIMIT\s+\d+)?\]/gi;
+
+// Regex SOSL
+const soslPattern = /FIND\s+{.*}\s+IN\s+\w+\s+FIELDS/gi;
+
+function shouldSkipFile(fileName) {
+    const lowerFileName = fileName.toLowerCase();
+    return lowerFileName.includes('dao') || lowerFileName.includes('test');
+}
+
+function findSoqlMatches(text) {
+    return text.match(soqlPattern) || [];
+}
+
+function findSoslMatches(text) {
+    return text.match(soslPattern) || [];
+}
+
+function buildResultMessage(soqlMatches, soslMatches) {
+    let message = '';
+
+    if (soqlMatches.length > 0) {
+        message += `${soqlMatches.length} valid SOQL queries found.\n`;
+    } else {
+        message += 'No valid SOQL queries found.\n';
+    }
+
+    if (soslMatches.length > 0) {
+        message += `${soslMatches.length} valid SOSL queries found.\n`;
+    } else {
+        message += 'No valid SOSL queries found.\n';
+    }
+
+    return message;
+}
+
+function computeMatchOffsets(text, matches) {
+    let searchFrom = 0;
+    return matches.map(match => {
+        const start = text.indexOf(match, searchFrom);
+        const end = start + match.length;
+        searchFrom = end;
+        return { match, start, end };
+    });
+}
+
 function activate(context) {
     console.log('"apex-query-validator" extension is active!');
 
@@ -11,39 +58,19 @@ function activate(context) {
         }
 
         const document = editor.document;
-        const fileName = document.fileName.toLowerCase();
-        
-        if (fileName.includes('dao') || fileName.includes('test')) {
+        const fileName = document.fileName;
+
+        if (shouldSkipFile(fileName)) {
             vscode.window.showInformationMessage('Validation skipped for DAO or test files');
             return;
         }
 
         const text = document.getText();
 
-        // Regex SOQL
-        const soqlPattern = /\[SELECT\s+.+\s+FROM\s+\w+(\s+WHERE\s+.+)?(\s+GROUP\s+BY\s+.+)?(\s+ORDER\s+BY\s+.+)?(\s+LIMIT\s+\d+)?\]/gi;
+        const soqlMatches = findSoqlMatches(text);
+        const soslMatches = findSoslMatches(text);
 
-        // Regex SOSL
-        const soslPattern = /FIND\s+{.*}\s+IN\s+\w+\s+FIELDS/gi;
-
-        const soqlMatches = text.match(soqlPattern) || [];
-        const soslMatches = text.match(soslPattern) || [];
-
-        let message = '';
-
-        if (soqlMatches.length > 0) {
-            message += `${soqlMatches.length} valid SOQL queries found.\n`;
-        } else {
-            message += 'No valid SOQL queries found.\n';
-        }
-
-        if (soslMatches.length > 0) {
-            message += `${soslMatches.length} valid SOSL queries found.\n`;
-        } else {
-            message += 'No valid SOSL queries found.\n';
-        }
-
-        vscode.window.showInformationMessage(message);
+        vscode.window.showInformationMessage(buildResultMessage(soqlMatches, soslMatches));
 
         // Highlight matches in the editor
         const decorationType = vscode.window.createTextEditorDecorationType({
@@ -52,10 +79,9 @@ function activate(context) {
         });
 
         const allMatches = [...soqlMatches, ...soslMatches];
-        const decorations = allMatches.map(match => {
-            const startPos = document.positionAt(text.indexOf(match));
-            const endPos = document.positionAt(text.indexOf(match) + match.length);
-            return { range: new vscode.Range(startPos, endPos) };
+        const offsets = computeMatchOffsets(text, allMatches);
+        const decorations = offsets.map(({ start, end }) => {
+            return { range: new vscode.Range(document.positionAt(start), document.positionAt(end)) };
         });
 
         editor.setDecorations(decorationType, decorations);
@@ -68,5 +94,10 @@ function deactivate() {}
 
 module.exports = {
     activate,
-    deactivate
+    deactivate,
+    shouldSkipFile,
+    findSoqlMatches,
+    findSoslMatches,
+    buildResultMessage,
+    computeMatchOffsets
 };
