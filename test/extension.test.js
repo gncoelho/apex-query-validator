@@ -1,15 +1,31 @@
 const assert = require('assert');
-
-// You can import and use all API from the 'vscode' module
-// as well as import your extension to test it
 const vscode = require('vscode');
-// const myExtension = require('../extension');
 
 suite('Extension Test Suite', () => {
-	vscode.window.showInformationMessage('Start all tests.');
+    suiteSetup(async () => {
+        const extension = vscode.extensions.getExtension('gncoelho.apex-query-validator');
+        await extension.activate();
+    });
 
-	test('Sample test', () => {
-		assert.strictEqual(-1, [1, 2, 3].indexOf(5));
-		assert.strictEqual(-1, [1, 2, 3].indexOf(0));
-	});
+    test('registers the validateSoqlSosl command on activation', async () => {
+        const commands = await vscode.commands.getCommands(true);
+        assert.ok(commands.includes('apex-query-validator.validateSoqlSosl'));
+    });
+
+    test('shows an error message when there is no active editor', async () => {
+        await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+
+        const originalShowErrorMessage = vscode.window.showErrorMessage;
+        let capturedMessage;
+        vscode.window.showErrorMessage = (message) => {
+            capturedMessage = message;
+        };
+
+        try {
+            await vscode.commands.executeCommand('apex-query-validator.validateSoqlSosl');
+            assert.strictEqual(capturedMessage, 'No active editor!');
+        } finally {
+            vscode.window.showErrorMessage = originalShowErrorMessage;
+        }
+    });
 });
