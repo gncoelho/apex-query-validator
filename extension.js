@@ -1,67 +1,105 @@
 const vscode = require('vscode');
+const { findQueries, isExemptFile, matchesGlob, buildSummaryMessage } = require('./validator');
+
+const decorationType = vscode.window.createTextEditorDecorationType({
+    backgroundColor: 'rgba(255, 255, 0, 0.2)',
+    border: '1px solid yellow'
+});
+
+function getConfig() {
+    const config = vscode.workspace.getConfiguration('apexQueryValidator');
+    return {
+        exemptKeywords: config.get('exemptFilenameKeywords'),
+        includeGlobs: config.get('includeGlobs'),
+        severity: config.get('diagnosticSeverity') === 'Error'
+            ? vscode.DiagnosticSeverity.Error
+            : vscode.DiagnosticSeverity.Warning,
+        autoValidate: config.get('autoValidate')
+    };
+}
+
+function clearDocument(document, diagnosticCollection) {
+    diagnosticCollection.delete(document.uri);
+    const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === document.uri.toString());
+    if (editor) {
+        editor.setDecorations(decorationType, []);
+    }
+}
+
+function runValidation(document, diagnosticCollection, { silent }) {
+    const { exemptKeywords, includeGlobs, severity, autoValidate } = getConfig();
+
+    if (!matchesGlob(document.fileName, includeGlobs)) {
+        clearDocument(document, diagnosticCollection);
+        return;
+    }
+
+    if (isExemptFile(document.fileName, exemptKeywords)) {
+        clearDocument(document, diagnosticCollection);
+        if (!silent) {
+            vscode.window.showInformationMessage('Validation skipped for DAO or test files');
+        }
+        return;
+    }
+
+    if (silent && !autoValidate) {
+        return;
+    }
+
+    const text = document.getText();
+    const matches = findQueries(text);
+
+    const diagnostics = matches.map(({ type, start, end }) => {
+        const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
+        const message = `${type} query should be moved to a DAO class.`;
+        return new vscode.Diagnostic(range, message, severity);
+    });
+    diagnosticCollection.set(document.uri, diagnostics);
+
+    const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === document.uri.toString());
+    if (editor) {
+        const decorations = matches.map(({ start, end }) => ({
+            range: new vscode.Range(document.positionAt(start), document.positionAt(end))
+        }));
+        editor.setDecorations(decorationType, decorations);
+    }
+
+    if (!silent) {
+        const soqlCount = matches.filter(m => m.type === 'SOQL').length;
+        const soslCount = matches.filter(m => m.type === 'SOSL').length;
+        vscode.window.showInformationMessage(buildSummaryMessage(soqlCount, soslCount));
+    }
+}
 
 function activate(context) {
     console.log('"apex-query-validator" extension is active!');
 
-    let disposable = vscode.commands.registerCommand('apex-query-validator.validateSoqlSosl', function () {
+    const diagnosticCollection = vscode.languages.createDiagnosticCollection('apexQueryValidator');
+    context.subscriptions.push(diagnosticCollection);
+    context.subscriptions.push(decorationType);
+
+    const disposable = vscode.commands.registerCommand('apex-query-validator.validateSoqlSosl', function () {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
             vscode.window.showErrorMessage('No active editor!');
             return;
         }
 
-        const document = editor.document;
-        const fileName = document.fileName.toLowerCase();
-        
-        if (fileName.includes('dao') || fileName.includes('test')) {
-            vscode.window.showInformationMessage('Validation skipped for DAO or test files');
-            return;
-        }
-
-        const text = document.getText();
-
-        // Regex SOQL
-        const soqlPattern = /\[SELECT\s+.+\s+FROM\s+\w+(\s+WHERE\s+.+)?(\s+GROUP\s+BY\s+.+)?(\s+ORDER\s+BY\s+.+)?(\s+LIMIT\s+\d+)?\]/gi;
-
-        // Regex SOSL
-        const soslPattern = /FIND\s+{.*}\s+IN\s+\w+\s+FIELDS/gi;
-
-        const soqlMatches = text.match(soqlPattern) || [];
-        const soslMatches = text.match(soslPattern) || [];
-
-        let message = '';
-
-        if (soqlMatches.length > 0) {
-            message += `${soqlMatches.length} valid SOQL queries found.\n`;
-        } else {
-            message += 'No valid SOQL queries found.\n';
-        }
-
-        if (soslMatches.length > 0) {
-            message += `${soslMatches.length} valid SOSL queries found.\n`;
-        } else {
-            message += 'No valid SOSL queries found.\n';
-        }
-
-        vscode.window.showInformationMessage(message);
-
-        // Highlight matches in the editor
-        const decorationType = vscode.window.createTextEditorDecorationType({
-            backgroundColor: 'rgba(255, 255, 0, 0.2)',
-            border: '1px solid yellow'
-        });
-
-        const allMatches = [...soqlMatches, ...soslMatches];
-        const decorations = allMatches.map(match => {
-            const startPos = document.positionAt(text.indexOf(match));
-            const endPos = document.positionAt(text.indexOf(match) + match.length);
-            return { range: new vscode.Range(startPos, endPos) };
-        });
-
-        editor.setDecorations(decorationType, decorations);
+        runValidation(editor.document, diagnosticCollection, { silent: false });
     });
-
     context.subscriptions.push(disposable);
+
+    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(document => {
+        runValidation(document, diagnosticCollection, { silent: true });
+    }));
+
+    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(document => {
+        runValidation(document, diagnosticCollection, { silent: true });
+    }));
+
+    context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(document => {
+        diagnosticCollection.delete(document.uri);
+    }));
 }
 
 function deactivate() {}
