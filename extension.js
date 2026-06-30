@@ -1,5 +1,5 @@
 const vscode = require('vscode');
-const { findQueries, isExemptFile, matchesGlob, buildSummaryMessage } = require('./validator');
+const { findQueries, isExemptFile, matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage } = require('./validator');
 
 const decorationType = vscode.window.createTextEditorDecorationType({
     backgroundColor: 'rgba(255, 255, 0, 0.2)',
@@ -26,6 +26,31 @@ function clearDocument(document, diagnosticCollection) {
     }
 }
 
+function applyDocumentValidation(document, diagnosticCollection, { severity }) {
+    const text = document.getText();
+    const matches = findQueries(text);
+
+    const diagnostics = matches.map(({ type, start, end }) => {
+        const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
+        return new vscode.Diagnostic(range, `${type} query should be moved to a DAO class.`, severity);
+    });
+    diagnosticCollection.set(document.uri, diagnostics);
+
+    const editor = vscode.window.visibleTextEditors.find(
+        e => e.document.uri.toString() === document.uri.toString()
+    );
+    if (editor) {
+        editor.setDecorations(decorationType, matches.map(({ start, end }) => ({
+            range: new vscode.Range(document.positionAt(start), document.positionAt(end))
+        })));
+    }
+
+    return {
+        soqlCount: matches.filter(m => m.type === 'SOQL').length,
+        soslCount: matches.filter(m => m.type === 'SOSL').length
+    };
+}
+
 function runValidation(document, diagnosticCollection, { silent }) {
     const { exemptKeywords, includeGlobs, severity, autoValidate } = getConfig();
 
@@ -46,29 +71,44 @@ function runValidation(document, diagnosticCollection, { silent }) {
         return;
     }
 
-    const text = document.getText();
-    const matches = findQueries(text);
-
-    const diagnostics = matches.map(({ type, start, end }) => {
-        const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
-        const message = `${type} query should be moved to a DAO class.`;
-        return new vscode.Diagnostic(range, message, severity);
-    });
-    diagnosticCollection.set(document.uri, diagnostics);
-
-    const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === document.uri.toString());
-    if (editor) {
-        const decorations = matches.map(({ start, end }) => ({
-            range: new vscode.Range(document.positionAt(start), document.positionAt(end))
-        }));
-        editor.setDecorations(decorationType, decorations);
-    }
+    const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, { severity });
 
     if (!silent) {
-        const soqlCount = matches.filter(m => m.type === 'SOQL').length;
-        const soslCount = matches.filter(m => m.type === 'SOSL').length;
         vscode.window.showInformationMessage(buildSummaryMessage(soqlCount, soslCount));
     }
+}
+
+async function validateWorkspace(diagnosticCollection) {
+    const { exemptKeywords, includeGlobs, severity } = getConfig();
+
+    const uriSets = await Promise.all(includeGlobs.map(glob => vscode.workspace.findFiles(glob)));
+    const seen = new Set();
+    const uris = [];
+    for (const batch of uriSets) {
+        for (const uri of batch) {
+            const key = uri.toString();
+            if (!seen.has(key)) { seen.add(key); uris.push(uri); }
+        }
+    }
+
+    let totalSoql = 0, totalSosl = 0, fileCount = 0;
+
+    await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Validating workspace...', cancellable: false },
+        async () => {
+            for (const uri of uris) {
+                const document = await vscode.workspace.openTextDocument(uri);
+                if (!matchesGlob(document.fileName, includeGlobs)) continue;
+                if (isExemptFile(document.fileName, exemptKeywords)) continue;
+                const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, { severity });
+                totalSoql += soqlCount;
+                totalSosl += soslCount;
+                fileCount++;
+            }
+        }
+    );
+
+    vscode.window.showInformationMessage(buildWorkspaceSummaryMessage(fileCount, totalSoql, totalSosl));
 }
 
 function activate(context) {
@@ -88,6 +128,12 @@ function activate(context) {
         runValidation(editor.document, diagnosticCollection, { silent: false });
     });
     context.subscriptions.push(disposable);
+
+    const workspaceDisposable = vscode.commands.registerCommand(
+        'apex-query-validator.validateWorkspace',
+        function () { return validateWorkspace(diagnosticCollection); }
+    );
+    context.subscriptions.push(workspaceDisposable);
 
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(document => {
         runValidation(document, diagnosticCollection, { silent: true });

@@ -22,10 +22,16 @@
   ],
   "main": "./extension.js",
   "contributes": {
-    "commands": [{
-      "command": "apex-query-validator.validateSoqlSosl",
-      "title": "Validate SOQL/SOSL"
-    }],
+    "commands": [
+      {
+        "command": "apex-query-validator.validateSoqlSosl",
+        "title": "Validate SOQL/SOSL"
+      },
+      {
+        "command": "apex-query-validator.validateWorkspace",
+        "title": "Validate Whole Project (SOQL/SOSL)"
+      }
+    ],
     "configuration": {
       "title": "Apex Query Validator",
       "properties": {

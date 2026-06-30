@@ -3,7 +3,8 @@ const {
     findQueries,
     isExemptFile,
     matchesGlob,
-    buildSummaryMessage
+    buildSummaryMessage,
+    buildWorkspaceSummaryMessage
 } = require('../validator');
 
 suite('validator', () => {
@@ -105,6 +106,44 @@ suite('validator', () => {
             const message = buildSummaryMessage(0, 0);
             assert.ok(message.includes('No SOQL queries found'));
             assert.ok(message.includes('No SOSL queries found'));
+        });
+    });
+
+    suite('buildWorkspaceSummaryMessage', () => {
+        test('includes file count in the message', () => {
+            assert.ok(buildWorkspaceSummaryMessage(5, 0, 0).includes('5'));
+        });
+
+        test('reports SOQL and SOSL counts when both are non-zero', () => {
+            const msg = buildWorkspaceSummaryMessage(3, 4, 2);
+            assert.ok(msg.includes('4 SOQL'));
+            assert.ok(msg.includes('2 SOSL'));
+            assert.ok(msg.includes('should be moved to a DAO class'));
+        });
+
+        test('uses singular "query" for count of 1', () => {
+            const msg = buildWorkspaceSummaryMessage(1, 1, 0);
+            assert.ok(msg.includes('1 SOQL query'));
+            assert.ok(!/1 SOQL queries/.test(msg));
+        });
+
+        test('reports no queries found when counts are zero', () => {
+            const msg = buildWorkspaceSummaryMessage(10, 0, 0);
+            assert.ok(msg.includes('No SOQL queries found'));
+            assert.ok(msg.includes('No SOSL queries found'));
+        });
+
+        test('does not say queries are valid when violations exist', () => {
+            const msg = buildWorkspaceSummaryMessage(2, 1, 1);
+            assert.ok(msg.includes('should be moved to a DAO class'));
+        });
+
+        test('uses plural "files" for count greater than 1', () => {
+            assert.ok(buildWorkspaceSummaryMessage(3, 0, 0).includes('3 files scanned'));
+        });
+
+        test('uses singular "file" for count of 1', () => {
+            assert.ok(buildWorkspaceSummaryMessage(1, 0, 0).includes('1 file scanned'));
         });
     });
 });
