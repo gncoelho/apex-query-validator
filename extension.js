@@ -78,8 +78,17 @@ function runValidation(document, diagnosticCollection, { silent }) {
     }
 }
 
-async function validateWorkspace(diagnosticCollection) {
+// Returns true when it is safe to delete diagnostics on close (URI is not workspace-validated).
+// Exported for testing.
+function shouldClearOnClose(uriString, workspaceValidatedUris) {
+    return !workspaceValidatedUris.has(uriString);
+}
+
+async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
     const { exemptKeywords, includeGlobs, severity } = getConfig();
+
+    // Reset tracked URIs so a re-run starts clean.
+    workspaceValidatedUris.clear();
 
     const uriSets = await Promise.all(includeGlobs.map(glob => vscode.workspace.findFiles(glob)));
     const seen = new Set();
@@ -101,6 +110,8 @@ async function validateWorkspace(diagnosticCollection) {
                 if (!matchesGlob(document.fileName, includeGlobs)) continue;
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
                 const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, { severity });
+                // Track this URI so onDidCloseTextDocument does not wipe its diagnostics.
+                workspaceValidatedUris.add(uri.toString());
                 totalSoql += soqlCount;
                 totalSosl += soslCount;
                 fileCount++;
@@ -115,6 +126,8 @@ function activate(context) {
     console.log('"apex-query-validator" extension is active!');
 
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('apexQueryValidator');
+    const workspaceValidatedUris = new Set();
+
     context.subscriptions.push(diagnosticCollection);
     context.subscriptions.push(decorationType);
 
@@ -131,7 +144,7 @@ function activate(context) {
 
     const workspaceDisposable = vscode.commands.registerCommand(
         'apex-query-validator.validateWorkspace',
-        function () { return validateWorkspace(diagnosticCollection); }
+        function () { return validateWorkspace(diagnosticCollection, workspaceValidatedUris); }
     );
     context.subscriptions.push(workspaceDisposable);
 
@@ -144,7 +157,9 @@ function activate(context) {
     }));
 
     context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(document => {
-        diagnosticCollection.delete(document.uri);
+        if (shouldClearOnClose(document.uri.toString(), workspaceValidatedUris)) {
+            diagnosticCollection.delete(document.uri);
+        }
     }));
 }
 
@@ -152,5 +167,6 @@ function deactivate() {}
 
 module.exports = {
     activate,
-    deactivate
+    deactivate,
+    shouldClearOnClose
 };
