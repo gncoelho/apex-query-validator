@@ -2,7 +2,7 @@
   "name": "apex-query-validator",
   "displayName": "apex-query-validator",
   "description": "Validating SOQL/SOSL Queries in Apex Classes Without 'DAO' or 'Test' in Name",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "gncoelho",
   "icon": "apex-query-validator.jpg",
   "license": "CC-BY-NC-4.0",
@@ -57,6 +57,12 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically run validation when an Apex file is opened or saved, in addition to running it manually via the command."
+        },
+        "apexQueryValidator.daoFilenameKeywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["dao"],
+          "description": "Filename substrings identifying DAO files where SOQL/SOSL queries should be moved. Used to power the Quick Fix suggestion that navigates to the matching DAO."
         }
       }
     }
