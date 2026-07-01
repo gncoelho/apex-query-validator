@@ -1,5 +1,9 @@
 const vscode = require('vscode');
-const { findQueries, isExemptFile, matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage } = require('./validator');
+const path = require('path');
+const {
+    findQueries, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
+    matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage
+} = require('./validator');
 
 const decorationType = vscode.window.createTextEditorDecorationType({
     backgroundColor: 'rgba(255, 255, 0, 0.2)',
@@ -14,7 +18,8 @@ function getConfig() {
         severity: config.get('diagnosticSeverity') === 'Error'
             ? vscode.DiagnosticSeverity.Error
             : vscode.DiagnosticSeverity.Warning,
-        autoValidate: config.get('autoValidate')
+        autoValidate: config.get('autoValidate'),
+        daoKeywords: config.get('daoFilenameKeywords')
     };
 }
 
@@ -32,7 +37,9 @@ function applyDocumentValidation(document, diagnosticCollection, { severity }) {
 
     const diagnostics = matches.map(({ type, start, end }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
-        return new vscode.Diagnostic(range, `${type} query should be moved to a DAO class.`, severity);
+        const diag = new vscode.Diagnostic(range, `${type} query should be moved to a DAO class.`, severity);
+        diag.source = 'apexQueryValidator';
+        return diag;
     });
     diagnosticCollection.set(document.uri, diagnostics);
 
@@ -122,6 +129,68 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
     vscode.window.showInformationMessage(buildWorkspaceSummaryMessage(fileCount, totalSoql, totalSosl));
 }
 
+// Finds DAO files in the workspace whose name contains one of the given SObject names.
+// Exported for testing.
+async function findDaoFilesForObjects(objectNames, { daoKeywords, includeGlobs }) {
+    if (!objectNames.length || !daoKeywords.length) return [];
+
+    const uriSets = await Promise.all(includeGlobs.map(g => vscode.workspace.findFiles(g)));
+    const seen = new Set();
+    const results = [];
+
+    for (const batch of uriSets) {
+        for (const uri of batch) {
+            const key = uri.toString();
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            const baseName = path.basename(uri.fsPath);
+            if (!isDaoFile(baseName, daoKeywords)) continue;
+
+            const lowerName = baseName.toLowerCase();
+            const hasObjectMatch = objectNames.some(obj => lowerName.includes(obj.toLowerCase()));
+            if (hasObjectMatch) results.push(uri);
+        }
+    }
+
+    return results;
+}
+
+class DaoSuggestionProvider {
+    async provideCodeActions(document, _range, context) {
+        const ourDiagnostics = context.diagnostics.filter(d => d.source === 'apexQueryValidator');
+        if (!ourDiagnostics.length) return [];
+
+        const { daoKeywords, includeGlobs } = getConfig();
+        const actions = [];
+        const suggestedUris = new Set();
+
+        for (const diagnostic of ourDiagnostics) {
+            const queryText = document.getText(diagnostic.range);
+            const objects = [
+                ...extractSoqlObjects(queryText),
+                ...extractSoslObjects(queryText)
+            ];
+
+            const daoUris = await findDaoFilesForObjects(objects, { daoKeywords, includeGlobs });
+
+            for (const uri of daoUris) {
+                const uriKey = uri.toString();
+                if (suggestedUris.has(uriKey)) continue;
+                suggestedUris.add(uriKey);
+
+                const label = path.basename(uri.fsPath);
+                const action = new vscode.CodeAction(`Open ${label}`, vscode.CodeActionKind.QuickFix);
+                action.command = { command: 'vscode.open', title: `Open ${label}`, arguments: [uri] };
+                action.diagnostics = [diagnostic];
+                actions.push(action);
+            }
+        }
+
+        return actions;
+    }
+}
+
 function activate(context) {
     console.log('"apex-query-validator" extension is active!');
 
@@ -148,6 +217,13 @@ function activate(context) {
     );
     context.subscriptions.push(workspaceDisposable);
 
+    const daoProviderDisposable = vscode.languages.registerCodeActionsProvider(
+        [{ scheme: 'file', pattern: '**/*.cls' }, { scheme: 'file', pattern: '**/*.trigger' }],
+        new DaoSuggestionProvider(),
+        { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+    );
+    context.subscriptions.push(daoProviderDisposable);
+
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(document => {
         runValidation(document, diagnosticCollection, { silent: true });
     }));
@@ -168,5 +244,6 @@ function deactivate() {}
 module.exports = {
     activate,
     deactivate,
-    shouldClearOnClose
+    shouldClearOnClose,
+    findDaoFilesForObjects
 };
