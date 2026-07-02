@@ -2,6 +2,9 @@ const assert = require('assert');
 const {
     findQueries,
     isExemptFile,
+    isDaoFile,
+    extractSoqlObjects,
+    extractSoslObjects,
     matchesGlob,
     buildSummaryMessage,
     buildWorkspaceSummaryMessage
@@ -59,6 +62,91 @@ suite('validator', () => {
             const results = findQueries('public class Foo { void bar() {} }');
             assert.deepStrictEqual(results, []);
         });
+
+        test('includes objects field in SOQL results', () => {
+            const results = findQueries('[SELECT Id FROM Account]');
+            assert.deepStrictEqual(results[0].objects, ['Account']);
+        });
+
+        test('includes objects field in SOSL results', () => {
+            const results = findQueries("[FIND 'x' IN ALL FIELDS RETURNING Contact(Id)]");
+            assert.deepStrictEqual(results[0].objects, ['Contact']);
+        });
+
+        test('includes empty objects array for SOSL without RETURNING', () => {
+            const results = findQueries('[FIND "Acme" IN ALL FIELDS]');
+            assert.deepStrictEqual(results[0].objects, []);
+        });
+    });
+
+    suite('extractSoqlObjects', () => {
+        test('extracts object from simple SELECT', () => {
+            assert.deepStrictEqual(extractSoqlObjects('[SELECT Id FROM Account]'), ['Account']);
+        });
+
+        test('extracts object with WHERE clause', () => {
+            assert.deepStrictEqual(
+                extractSoqlObjects("[SELECT Id FROM Contact WHERE Name = 'x']"),
+                ['Contact']
+            );
+        });
+
+        test('is case-insensitive for FROM keyword', () => {
+            assert.deepStrictEqual(extractSoqlObjects('[select id from Opportunity]'), ['Opportunity']);
+        });
+
+        test('extracts object with ORDER BY and LIMIT', () => {
+            assert.deepStrictEqual(
+                extractSoqlObjects('[SELECT Id FROM Lead ORDER BY CreatedDate LIMIT 10]'),
+                ['Lead']
+            );
+        });
+
+        test('returns empty array when no FROM clause present', () => {
+            assert.deepStrictEqual(extractSoqlObjects('[FIND "x" IN ALL FIELDS]'), []);
+        });
+
+        test('returns empty array for empty string', () => {
+            assert.deepStrictEqual(extractSoqlObjects(''), []);
+        });
+    });
+
+    suite('extractSoslObjects', () => {
+        test('extracts single object with fields from RETURNING clause', () => {
+            assert.deepStrictEqual(
+                extractSoslObjects("[FIND 'John' IN NAME FIELDS RETURNING Contact(Id, Name)]"),
+                ['Contact']
+            );
+        });
+
+        test('extracts multiple objects from RETURNING clause', () => {
+            const result = extractSoslObjects(
+                "[FIND 'Acme' IN ALL FIELDS RETURNING Contact(Id), Account(Id, Name)]"
+            );
+            assert.deepStrictEqual(result, ['Contact', 'Account']);
+        });
+
+        test('extracts object without fields specified in RETURNING clause', () => {
+            assert.deepStrictEqual(
+                extractSoslObjects("[FIND 'x' IN ALL FIELDS RETURNING Contact]"),
+                ['Contact']
+            );
+        });
+
+        test('returns empty array when no RETURNING clause', () => {
+            assert.deepStrictEqual(extractSoslObjects('[FIND "Acme" IN ALL FIELDS]'), []);
+        });
+
+        test('deduplicates objects that appear more than once', () => {
+            const result = extractSoslObjects(
+                "[FIND 'x' IN ALL FIELDS RETURNING Contact(Id), Contact(Name)]"
+            );
+            assert.deepStrictEqual(result, ['Contact']);
+        });
+
+        test('returns empty array for empty string', () => {
+            assert.deepStrictEqual(extractSoslObjects(''), []);
+        });
     });
 
     suite('isExemptFile', () => {
@@ -74,6 +162,27 @@ suite('validator', () => {
         test('respects a custom keyword list', () => {
             assert.strictEqual(isExemptFile('/src/AccountRepository.cls', ['repository']), true);
             assert.strictEqual(isExemptFile('/src/AccountDAO.cls', ['repository']), false);
+        });
+    });
+
+    suite('isDaoFile', () => {
+        test('identifies DAO files case-insensitively', () => {
+            assert.strictEqual(isDaoFile('/src/AccountDAO.cls', ['dao']), true);
+            assert.strictEqual(isDaoFile('/src/accountdao.cls', ['dao']), true);
+        });
+
+        test('returns false for non-DAO files', () => {
+            assert.strictEqual(isDaoFile('/src/AccountService.cls', ['dao']), false);
+            assert.strictEqual(isDaoFile('/src/AccountTest.cls', ['dao']), false);
+        });
+
+        test('respects a custom dao keyword list', () => {
+            assert.strictEqual(isDaoFile('/src/AccountRepository.cls', ['repository']), true);
+            assert.strictEqual(isDaoFile('/src/AccountDAO.cls', ['repository']), false);
+        });
+
+        test('returns false for empty keywords list', () => {
+            assert.strictEqual(isDaoFile('/src/AccountDAO.cls', []), false);
         });
     });
 
