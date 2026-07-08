@@ -472,6 +472,92 @@ const RULES = [
             }
             return findings;
         }
+    },
+
+    // --- Governor limits -----------------------------------------------------
+    {
+        id: 'governor/too-many-queries',
+        category: 'governor',
+        check(text, options = {}) {
+            const max = options.maxQueriesPerFile != null ? options.maxQueriesPerFile : 5;
+            let count = 0;
+            // eslint-disable-next-line no-unused-vars
+            for (const _soql of text.matchAll(freshRegex(SOQL_PATTERN))) count++;
+            // eslint-disable-next-line no-unused-vars
+            for (const _sosl of text.matchAll(freshRegex(SOSL_PATTERN))) count++;
+            if (count <= max) return [];
+            return [{
+                ruleId: 'governor/too-many-queries',
+                category: 'governor',
+                message: `File contains ${count} inline SOQL/SOSL queries (threshold: ${max}) — consider consolidating queries to stay within the 100 queries per transaction limit.`,
+                start: 0,
+                end: 0,
+                type: 'governor',
+                objects: []
+            }];
+        }
+    },
+    {
+        id: 'governor/dynamic-soql-call',
+        category: 'governor',
+        check(text) {
+            const findings = [];
+            const callPattern = /Database\s*\.\s*query\s*\(/gi;
+            let m;
+            while ((m = callPattern.exec(text)) !== null) {
+                const argStart = m.index + m[0].length;
+                let depth = 1;
+                let argEnd = argStart;
+                for (let i = argStart; i < text.length; i++) {
+                    if (text[i] === '(') depth++;
+                    else if (text[i] === ')') {
+                        depth--;
+                        if (depth === 0) { argEnd = i; break; }
+                    }
+                }
+                findings.push({
+                    ruleId: 'governor/dynamic-soql-call',
+                    category: 'governor',
+                    message: 'Database.query() call detected — dynamic SOQL bypasses bracket-query detection and still counts against the 100 SOQL governor limit.',
+                    start: m.index,
+                    end: argEnd + 1,
+                    type: 'dynamic-soql',
+                    objects: []
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'governor/dynamic-sosl-call',
+        category: 'governor',
+        check(text) {
+            const findings = [];
+            const callPattern = /(?:Search\s*\.\s*query|Database\s*\.\s*search)\s*\(/gi;
+            let m;
+            while ((m = callPattern.exec(text)) !== null) {
+                const argStart = m.index + m[0].length;
+                let depth = 1;
+                let argEnd = argStart;
+                for (let i = argStart; i < text.length; i++) {
+                    if (text[i] === '(') depth++;
+                    else if (text[i] === ')') {
+                        depth--;
+                        if (depth === 0) { argEnd = i; break; }
+                    }
+                }
+                findings.push({
+                    ruleId: 'governor/dynamic-sosl-call',
+                    category: 'governor',
+                    message: 'Dynamic SOSL call detected — Search.query() / Database.search() bypasses bracket-query detection and still counts against governor limits.',
+                    start: m.index,
+                    end: argEnd + 1,
+                    type: 'dynamic-sosl',
+                    objects: []
+                });
+            }
+            return findings;
+        }
     }
 ];
 

@@ -722,4 +722,137 @@ suite('validator', () => {
             assert.ok(f.message.includes('ALL'));
         });
     });
+
+    suite('governor/too-many-queries', () => {
+        const cats = { governor: true, dao: false, performance: false, security: false, style: false };
+        // Build text with N queries (all safe: have LIMIT, WHERE, named fields)
+        const makeQueries = n => Array.from({ length: n },
+            (_, i) => `[SELECT Id, Name FROM Account${i} WHERE Id != null LIMIT 1]`
+        ).join(' ');
+
+        test('fires when query count exceeds default threshold of 5', () => {
+            const r = runRules(makeQueries(6), cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/too-many-queries'));
+        });
+
+        test('does not fire when query count equals the threshold', () => {
+            const r = runRules(makeQueries(5), cats);
+            assert.ok(!r.some(f => f.ruleId === 'governor/too-many-queries'));
+        });
+
+        test('does not fire when query count is below the threshold', () => {
+            const r = runRules(makeQueries(3), cats);
+            assert.ok(!r.some(f => f.ruleId === 'governor/too-many-queries'));
+        });
+
+        test('respects a custom maxQueriesPerFile option', () => {
+            const r = runRules(makeQueries(3), cats, { maxQueriesPerFile: 2 });
+            assert.ok(r.some(f => f.ruleId === 'governor/too-many-queries'));
+        });
+
+        test('counts SOSL queries too', () => {
+            const text = makeQueries(4) + " [FIND 'x' IN ALL FIELDS] [FIND 'y' IN ALL FIELDS]";
+            const r = runRules(text, cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/too-many-queries'));
+        });
+
+        test('finding is emitted at offset 0', () => {
+            const r = runRules(makeQueries(6), cats);
+            const f = r.find(x => x.ruleId === 'governor/too-many-queries');
+            assert.strictEqual(f.start, 0);
+            assert.strictEqual(f.end, 0);
+        });
+
+        test('message includes count and threshold', () => {
+            const r = runRules(makeQueries(6), cats);
+            const f = r.find(x => x.ruleId === 'governor/too-many-queries');
+            assert.ok(f.message.includes('6'));
+            assert.ok(f.message.includes('5'));
+        });
+
+        test('returns no findings when governor category is disabled', () => {
+            const r = runRules(makeQueries(6), { governor: false });
+            assert.ok(!r.some(f => f.ruleId === 'governor/too-many-queries'));
+        });
+    });
+
+    suite('governor/dynamic-soql-call', () => {
+        const cats = { governor: true, dao: false, performance: false, security: false, style: false };
+
+        test('flags a Database.query() call', () => {
+            const r = runRules('Database.query(queryString)', cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+
+        test('flags Database.query() with string concatenation', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + obj)", cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+
+        test('flags Database.query() with a plain string literal', () => {
+            const r = runRules("Database.query('SELECT Id FROM Account LIMIT 1')", cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+
+        test('is case-insensitive for DATABASE.QUERY', () => {
+            const r = runRules('DATABASE.QUERY(q)', cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+
+        test('flags multiple calls and reports each one', () => {
+            const r = runRules('Database.query(q1); Database.query(q2);', cats);
+            assert.strictEqual(r.filter(f => f.ruleId === 'governor/dynamic-soql-call').length, 2);
+        });
+
+        test('message mentions governor limit', () => {
+            const r = runRules('Database.query(q)', cats);
+            const f = r.find(x => x.ruleId === 'governor/dynamic-soql-call');
+            assert.ok(f.message.toLowerCase().includes('governor'));
+        });
+
+        test('returns no findings when governor category is disabled', () => {
+            const r = runRules('Database.query(q)', { governor: false });
+            assert.ok(!r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+    });
+
+    suite('governor/dynamic-sosl-call', () => {
+        const cats = { governor: true, dao: false, performance: false, security: false, style: false };
+
+        test('flags a Search.query() call', () => {
+            const r = runRules('Search.query(searchQuery)', cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-sosl-call'));
+        });
+
+        test('flags a Database.search() call', () => {
+            const r = runRules('Database.search(searchQuery)', cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-sosl-call'));
+        });
+
+        test('is case-insensitive', () => {
+            const r = runRules('SEARCH.QUERY(q)', cats);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-sosl-call'));
+        });
+
+        test('flags multiple calls and reports each one', () => {
+            const r = runRules('Search.query(q1); Database.search(q2);', cats);
+            assert.strictEqual(r.filter(f => f.ruleId === 'governor/dynamic-sosl-call').length, 2);
+        });
+
+        test('does not flag Database.query() — that is G2', () => {
+            const r = runRules('Database.query(q)', cats);
+            assert.ok(!r.some(f => f.ruleId === 'governor/dynamic-sosl-call'));
+        });
+
+        test('message mentions governor limits', () => {
+            const r = runRules('Search.query(q)', cats);
+            const f = r.find(x => x.ruleId === 'governor/dynamic-sosl-call');
+            assert.ok(f.message.toLowerCase().includes('governor'));
+        });
+
+        test('returns no findings when governor category is disabled', () => {
+            const r = runRules('Search.query(q)', { governor: false });
+            assert.ok(!r.some(f => f.ruleId === 'governor/dynamic-sosl-call'));
+        });
+    });
 });

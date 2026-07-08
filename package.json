@@ -64,6 +64,11 @@
           "default": ["dao"],
           "description": "Filename substrings identifying DAO files where SOQL/SOSL queries should be moved. Used to power the Quick Fix suggestion that navigates to the matching DAO."
         },
+        "apexQueryValidator.maxQueriesPerFile": {
+          "type": "number",
+          "default": 5,
+          "description": "Maximum number of inline SOQL/SOSL queries allowed per file before the governor/too-many-queries rule fires."
+        },
         "apexQueryValidator.maxSelectFields": {
           "type": "number",
           "default": 10,
