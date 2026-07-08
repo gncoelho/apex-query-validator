@@ -48,28 +48,40 @@ function extractFieldList(queryText) {
 }
 
 /**
- * Returns true when the query's offset falls inside a for/while loop body
- * in the surrounding document text.
+ * Advances index i past a string literal starting at text[i] (either ' or ").
+ * Returns the index of the closing quote, or text.length - 1 if unclosed.
+ */
+function skipStringLiteral(text, i) {
+    const quote = text[i];
+    i++;
+    while (i < text.length) {
+        if (text[i] === '\\') { i += 2; continue; } // escaped char
+        if (text[i] === quote) return i;
+        i++;
+    }
+    return i - 1;
+}
+
+/**
+ * Returns true when the query's offset falls inside a for/while/do-while loop
+ * body in the surrounding document text.
  *
- * Strategy: find all loop keyword positions before the query, then for each
- * (innermost first) walk forward matching parens to find the body brace, then
- * walk the braces to find the body end. If the query offset falls inside,
- * return true.
+ * Handles:
+ *   - for (...) { ... }        — condition parens skipped, then brace range found
+ *   - while (...) { ... }      — same
+ *   - do { ... } while (...);  — body brace immediately follows `do`
  */
 function isInsideLoop(text, queryStart) {
-    const loopPattern = /\b(for|while)\s*\(/gi;
-    let m;
-    const loopStarts = [];
-    while ((m = loopPattern.exec(text)) !== null) {
-        if (m.index < queryStart) loopStarts.push(m.index);
-    }
+    const bodyStarts = [];
 
-    for (let i = loopStarts.length - 1; i >= 0; i--) {
-        const loopKeywordPos = loopStarts[i];
-        // Skip over the condition parentheses to find the body opening brace
+    // for(...){...} and while(...){...}
+    const condLoopPattern = /\b(for|while)\s*\(/gi;
+    let m;
+    while ((m = condLoopPattern.exec(text)) !== null) {
+        if (m.index >= queryStart) continue;
         let depth = 0;
         let bodyStart = -1;
-        for (let j = loopKeywordPos; j < text.length; j++) {
+        for (let j = m.index; j < text.length; j++) {
             if (text[j] === '(') { depth++; continue; }
             if (text[j] === ')') {
                 depth--;
@@ -78,12 +90,19 @@ function isInsideLoop(text, queryStart) {
                     if (braceIdx !== -1) bodyStart = braceIdx;
                     break;
                 }
-                continue;
             }
         }
-        if (bodyStart === -1 || bodyStart >= queryStart) continue;
+        if (bodyStart !== -1 && bodyStart < queryStart) bodyStarts.push(bodyStart);
+    }
 
-        // Walk brace depth to find the body closing brace
+    // do{...}while(...)
+    const doPattern = /\bdo\s*\{/gi;
+    while ((m = doPattern.exec(text)) !== null) {
+        const bodyStart = text.indexOf('{', m.index);
+        if (bodyStart !== -1 && bodyStart < queryStart) bodyStarts.push(bodyStart);
+    }
+
+    for (const bodyStart of bodyStarts) {
         let braceDepth = 1;
         let bodyEnd = -1;
         for (let j = bodyStart + 1; j < text.length; j++) {
@@ -291,23 +310,28 @@ const RULES = [
         check(text) {
             const findings = [];
             // Match Database.query( and scan forward to find the matching closing
-            // paren, then check whether any + operator appears inside the argument.
+            // paren, skipping string literals so a ) inside a string doesn't close
+            // the depth counter early. Then check whether any + operator appears
+            // outside of string literals in the argument.
             const callPattern = /Database\s*\.\s*query\s*\(/gi;
             let m;
             while ((m = callPattern.exec(text)) !== null) {
                 const argStart = m.index + m[0].length;
                 let depth = 1;
                 let argEnd = -1;
+                let hasConcat = false;
                 for (let i = argStart; i < text.length; i++) {
-                    if (text[i] === '(') depth++;
-                    else if (text[i] === ')') {
+                    const ch = text[i];
+                    if (ch === '\'' || ch === '"') { i = skipStringLiteral(text, i); continue; }
+                    if (ch === '(') { depth++; continue; }
+                    if (ch === ')') {
                         depth--;
                         if (depth === 0) { argEnd = i; break; }
+                        continue;
                     }
+                    if (ch === '+') hasConcat = true;
                 }
-                if (argEnd === -1) continue;
-                const arg = text.slice(argStart, argEnd);
-                if (!arg.includes('+')) continue;
+                if (argEnd === -1 || !hasConcat) continue;
                 findings.push({
                     ruleId: 'security/dynamic-soql-concat',
                     category: 'security',
@@ -362,15 +386,15 @@ const RULES = [
         category: 'security',
         check(text) {
             const findings = [];
-            const strLiteralInWhere = /'[^']*'/;
-            const bindVar = /:\s*\w+/;
             for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
                 const q = m[0];
                 const whereMatch = /\bWHERE\b([\s\S]*)/i.exec(q);
                 if (!whereMatch) continue;
-                const whereClause = whereMatch[1];
-                if (!strLiteralInWhere.test(whereClause)) continue;
-                if (bindVar.test(whereClause)) continue; // bind variable present — OK
+                // Strip bind-variable values (e.g. :myVar) from the WHERE clause
+                // so they don't mask adjacent string literals that are still unbound.
+                const whereClauseStripped = whereMatch[1].replace(/:\s*\w+/g, '');
+                // If any string literal remains after stripping bind vars, flag it
+                if (!/'[^']*'/.test(whereClauseStripped)) continue;
                 findings.push({
                     ruleId: 'security/user-input-in-where',
                     category: 'security',
@@ -649,11 +673,17 @@ module.exports = {
     SOSL_PATTERN,
     RULES,
     runRules,
+    // Exported helpers (used in tests and for extension consumers)
+    hasAggregate,
+    extractFieldList,
+    skipStringLiteral,
+    isInsideLoop,
     extractSoqlObjects,
     extractSoslObjects,
     findQueries,
     isExemptFile,
     isDaoFile,
+    globToRegExp,
     matchesGlob,
     buildSummaryMessage,
     buildWorkspaceSummaryMessage

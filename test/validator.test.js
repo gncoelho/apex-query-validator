@@ -2,10 +2,15 @@ const assert = require('assert');
 const {
     findQueries,
     runRules,
+    hasAggregate,
+    extractFieldList,
+    skipStringLiteral,
+    isInsideLoop,
     isExemptFile,
     isDaoFile,
     extractSoqlObjects,
     extractSoslObjects,
+    globToRegExp,
     matchesGlob,
     buildSummaryMessage,
     buildWorkspaceSummaryMessage
@@ -569,9 +574,10 @@ suite('validator', () => {
         });
 
         test('does not flag a WHERE clause with both a literal and a bind variable', () => {
-            // Bind variable is present — considered safe
+            // With the fixed logic, a bare literal alongside a bind variable IS flagged —
+            // the presence of :n does not excuse the hardcoded 'Partner' literal.
             const r = runRules("[SELECT Id FROM Account WHERE Name = :n AND Type = 'Partner' LIMIT 1]", cats);
-            assert.ok(!r.some(f => f.ruleId === 'security/user-input-in-where'));
+            assert.ok(r.some(f => f.ruleId === 'security/user-input-in-where'));
         });
 
         test('does not flag a query with no WHERE clause', () => {
@@ -853,6 +859,248 @@ suite('validator', () => {
         test('returns no findings when governor category is disabled', () => {
             const r = runRules('Search.query(q)', { governor: false });
             assert.ok(!r.some(f => f.ruleId === 'governor/dynamic-sosl-call'));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // Direct helper function tests
+    // -------------------------------------------------------------------------
+
+    suite('hasAggregate', () => {
+        test('detects COUNT()', () => {
+            assert.strictEqual(hasAggregate('[SELECT COUNT() FROM Account]'), true);
+        });
+
+        test('detects COUNT(Id)', () => {
+            assert.strictEqual(hasAggregate('[SELECT COUNT(Id) FROM Account]'), true);
+        });
+
+        test('detects SUM', () => {
+            assert.strictEqual(hasAggregate('[SELECT SUM(Amount) FROM Opportunity]'), true);
+        });
+
+        test('detects AVG', () => {
+            assert.strictEqual(hasAggregate('[SELECT AVG(Amount) FROM Opportunity]'), true);
+        });
+
+        test('detects MAX', () => {
+            assert.strictEqual(hasAggregate('[SELECT MAX(CreatedDate) FROM Account]'), true);
+        });
+
+        test('detects MIN', () => {
+            assert.strictEqual(hasAggregate('[SELECT MIN(CreatedDate) FROM Account]'), true);
+        });
+
+        test('is case-insensitive', () => {
+            assert.strictEqual(hasAggregate('[SELECT count(id) FROM account]'), true);
+        });
+
+        test('returns false for a plain field list', () => {
+            assert.strictEqual(hasAggregate('[SELECT Id, Name FROM Account]'), false);
+        });
+
+        test('returns false for an empty string', () => {
+            assert.strictEqual(hasAggregate(''), false);
+        });
+    });
+
+    suite('extractFieldList', () => {
+        test('extracts a single field', () => {
+            assert.strictEqual(extractFieldList('[SELECT Id FROM Account]'), 'Id');
+        });
+
+        test('extracts multiple fields', () => {
+            assert.strictEqual(extractFieldList('[SELECT Id, Name, Phone FROM Account]'), 'Id, Name, Phone');
+        });
+
+        test('is case-insensitive for SELECT and FROM keywords', () => {
+            assert.strictEqual(extractFieldList('[select id from Account]'), 'id');
+        });
+
+        test('returns null when FROM clause is absent', () => {
+            assert.strictEqual(extractFieldList('[FIND "x" IN ALL FIELDS]'), null);
+        });
+
+        test('returns null for an empty string', () => {
+            assert.strictEqual(extractFieldList(''), null);
+        });
+
+        test('handles extra whitespace around field names', () => {
+            const result = extractFieldList('[SELECT  Id  ,  Name  FROM Account]');
+            assert.ok(result !== null);
+            assert.ok(result.includes('Id'));
+        });
+    });
+
+    suite('skipStringLiteral', () => {
+        test('advances past a single-quoted string', () => {
+            const text = "'hello' rest";
+            const end = skipStringLiteral(text, 0);
+            assert.strictEqual(end, 6); // index of closing '
+            assert.strictEqual(text[end], '\'');
+        });
+
+        test('advances past a double-quoted string', () => {
+            const text = '"world" rest';
+            const end = skipStringLiteral(text, 0);
+            assert.strictEqual(end, 6);
+            assert.strictEqual(text[end], '"');
+        });
+
+        test('handles escaped quote inside string', () => {
+            const text = "'it\\'s here' rest";
+            const end = skipStringLiteral(text, 0);
+            assert.strictEqual(text[end], '\'');
+        });
+
+        test('returns last index when string is unclosed', () => {
+            const text = "'unclosed";
+            const end = skipStringLiteral(text, 0);
+            assert.strictEqual(end, text.length - 1);
+        });
+
+        test('string containing closing paren does not confuse callers', () => {
+            // Simulates Database.query('WHERE Name = ")" LIMIT 1') — the ) is inside string
+            const text = "'WHERE Name = \")\" LIMIT 1'";
+            const end = skipStringLiteral(text, 0);
+            assert.strictEqual(text[end], '\''); // closes at outer quote, not at )
+        });
+    });
+
+    suite('isInsideLoop', () => {
+        test('returns true for a query inside a for loop', () => {
+            const text = 'for (Integer i = 0; i < 5; i++) { [SELECT Id FROM Account LIMIT 1]; }';
+            const queryStart = text.indexOf('[');
+            assert.strictEqual(isInsideLoop(text, queryStart), true);
+        });
+
+        test('returns true for a query inside a while loop', () => {
+            const text = 'while (cond) { [SELECT Id FROM Account LIMIT 1]; }';
+            const queryStart = text.indexOf('[');
+            assert.strictEqual(isInsideLoop(text, queryStart), true);
+        });
+
+        test('returns true for a query inside a do-while loop', () => {
+            const text = 'do { [SELECT Id FROM Account LIMIT 1]; } while (cond);';
+            const queryStart = text.indexOf('[');
+            assert.strictEqual(isInsideLoop(text, queryStart), true);
+        });
+
+        test('returns false for a query outside any loop', () => {
+            const text = 'List<Account> a = [SELECT Id FROM Account LIMIT 1];';
+            const queryStart = text.indexOf('[');
+            assert.strictEqual(isInsideLoop(text, queryStart), false);
+        });
+
+        test('returns false for a query after a loop body has closed', () => {
+            const text = 'for (Integer i = 0; i < 5; i++) { Integer x = 1; } [SELECT Id FROM Account LIMIT 1];';
+            const queryStart = text.indexOf('[');
+            assert.strictEqual(isInsideLoop(text, queryStart), false);
+        });
+
+        test('returns true for a query inside a nested loop', () => {
+            const text = 'for (Integer i = 0; i < 3; i++) { for (Integer j = 0; j < 3; j++) { [SELECT Id FROM Account LIMIT 1]; } }';
+            const queryStart = text.indexOf('[');
+            assert.strictEqual(isInsideLoop(text, queryStart), true);
+        });
+
+        test('returns true for a query in outer loop when not in inner loop', () => {
+            const text = 'for (Integer i = 0; i < 3; i++) { for (Integer j = 0; j < 3; j++) { Integer x = 1; } [SELECT Id FROM Account LIMIT 1]; }';
+            const queryStart = text.lastIndexOf('[');
+            assert.strictEqual(isInsideLoop(text, queryStart), true);
+        });
+    });
+
+    suite('globToRegExp', () => {
+        test('matches a simple extension glob', () => {
+            assert.ok(globToRegExp('**/*.cls').test('src/classes/MyClass.cls'));
+        });
+
+        test('matches a trigger glob', () => {
+            assert.ok(globToRegExp('**/*.trigger').test('triggers/MyTrigger.trigger'));
+        });
+
+        test('does not match a different extension', () => {
+            assert.ok(!globToRegExp('**/*.cls').test('src/MyClass.js'));
+        });
+
+        test('matches a path with a single ** prefix', () => {
+            // globToRegExp handles a single leading ** correctly
+            assert.ok(globToRegExp('**/*.cls').test('force-app/main/dao/AccountDAO.cls'));
+        });
+
+        test('? matches exactly one character', () => {
+            assert.ok(globToRegExp('src/Account?.cls').test('src/AccountX.cls'));
+            assert.ok(!globToRegExp('src/Account?.cls').test('src/Account.cls'));
+        });
+
+        test('is case-insensitive', () => {
+            assert.ok(globToRegExp('**/*.CLS').test('src/MyClass.cls'));
+        });
+
+        test('escapes regex special characters in literal parts', () => {
+            assert.ok(globToRegExp('**/*.cls-meta.xml').test('src/MyClass.cls-meta.xml'));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // Bug-fix regression tests
+    // -------------------------------------------------------------------------
+
+    suite('security/dynamic-soql-concat — string-aware paren walker', () => {
+        const cats = { security: true, dao: false, performance: false, style: false, governor: false };
+
+        test('does not flag when ) appears inside a string literal in the argument', () => {
+            // The ) inside 'foo)bar' must not close the depth counter prematurely
+            const r = runRules("Database.query('SELECT Id FROM Account WHERE Name = \")\" LIMIT 1')", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('does flag when + appears outside string literals alongside an inner )', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + sobjectType + ' WHERE Name = \")\"')", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('does not flag a plain variable argument containing a ) in a comment', () => {
+            // No + sign at all — should not flag
+            const r = runRules('Database.query(buildQuery(criteria))', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+    });
+
+    suite('security/user-input-in-where — mixed literal and bind variable', () => {
+        const cats = { security: true, dao: false, performance: false, style: false, governor: false };
+
+        test('flags when a hardcoded literal coexists with a bind variable in the same WHERE', () => {
+            // Both 'Acme' (hardcoded) and :status (bound) present — should still flag 'Acme'
+            const r = runRules("[SELECT Id FROM Account WHERE Name = 'Acme' AND Status = :status LIMIT 1]", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/user-input-in-where'));
+        });
+
+        test('does not flag when the WHERE clause has only bind variables', () => {
+            const r = runRules('[SELECT Id FROM Account WHERE Name = :n AND Status = :s LIMIT 1]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/user-input-in-where'));
+        });
+
+        test('does not flag when the WHERE clause has no string literals at all', () => {
+            const r = runRules('[SELECT Id FROM Account WHERE Amount > 100 LIMIT 1]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/user-input-in-where'));
+        });
+    });
+
+    suite('perf/soql-in-loop — do-while support', () => {
+        const cats = { performance: true, dao: false, security: false, style: false, governor: false };
+
+        test('flags a SOQL query inside a do-while loop body', () => {
+            const text = 'do { List<Account> a = [SELECT Id, Name FROM Account WHERE Id != null LIMIT 1]; } while (condition);';
+            const r = runRules(text, cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/soql-in-loop'));
+        });
+
+        test('does not flag a query after the do-while body closes', () => {
+            const text = 'do { Integer x = 1; } while (cond); List<Account> a = [SELECT Id, Name FROM Account WHERE Id != null LIMIT 1];';
+            const r = runRules(text, cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/soql-in-loop'));
         });
     });
 });
