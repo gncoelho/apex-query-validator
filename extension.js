@@ -1,7 +1,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const {
-    findQueries, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
+    runRules, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
     matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage
 } = require('./validator');
 
@@ -19,7 +19,11 @@ function getConfig() {
             ? vscode.DiagnosticSeverity.Error
             : vscode.DiagnosticSeverity.Warning,
         autoValidate: config.get('autoValidate'),
-        daoKeywords: config.get('daoFilenameKeywords')
+        daoKeywords: config.get('daoFilenameKeywords'),
+        enablePerformanceRules: config.get('enablePerformanceRules'),
+        enableSecurityRules: config.get('enableSecurityRules'),
+        enableStyleRules: config.get('enableStyleRules'),
+        enableGovernorRules: config.get('enableGovernorRules')
     };
 }
 
@@ -31,13 +35,26 @@ function clearDocument(document, diagnosticCollection) {
     }
 }
 
-function applyDocumentValidation(document, diagnosticCollection, { severity }) {
+function applyDocumentValidation(document, diagnosticCollection, {
+    severity,
+    enablePerformanceRules,
+    enableSecurityRules,
+    enableStyleRules,
+    enableGovernorRules
+}) {
     const text = document.getText();
-    const matches = findQueries(text);
+    const findings = runRules(text, {
+        dao: true,
+        performance: enablePerformanceRules,
+        security: enableSecurityRules,
+        style: enableStyleRules,
+        governor: enableGovernorRules
+    });
 
-    const diagnostics = matches.map(({ type, start, end }) => {
+    const diagnostics = findings.map(({ message, start, end, category }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
-        const diag = new vscode.Diagnostic(range, `${type} query should be moved to a DAO class.`, severity);
+        const diagSeverity = category === 'style' ? vscode.DiagnosticSeverity.Information : severity;
+        const diag = new vscode.Diagnostic(range, message, diagSeverity);
         diag.source = 'apexQueryValidator';
         return diag;
     });
@@ -47,19 +64,20 @@ function applyDocumentValidation(document, diagnosticCollection, { severity }) {
         e => e.document.uri.toString() === document.uri.toString()
     );
     if (editor) {
-        editor.setDecorations(decorationType, matches.map(({ start, end }) => ({
+        editor.setDecorations(decorationType, findings.map(({ start, end }) => ({
             range: new vscode.Range(document.positionAt(start), document.positionAt(end))
         })));
     }
 
     return {
-        soqlCount: matches.filter(m => m.type === 'SOQL').length,
-        soslCount: matches.filter(m => m.type === 'SOSL').length
+        soqlCount: findings.filter(f => f.type === 'SOQL').length,
+        soslCount: findings.filter(f => f.type === 'SOSL').length
     };
 }
 
 function runValidation(document, diagnosticCollection, { silent }) {
-    const { exemptKeywords, includeGlobs, severity, autoValidate } = getConfig();
+    const { exemptKeywords, includeGlobs, severity, autoValidate,
+        enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules } = getConfig();
 
     if (!matchesGlob(document.fileName, includeGlobs)) {
         clearDocument(document, diagnosticCollection);
@@ -78,7 +96,9 @@ function runValidation(document, diagnosticCollection, { silent }) {
         return;
     }
 
-    const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, { severity });
+    const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
+        severity, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules
+    });
 
     if (!silent) {
         vscode.window.showInformationMessage(buildSummaryMessage(soqlCount, soslCount));
@@ -92,7 +112,8 @@ function shouldClearOnClose(uriString, workspaceValidatedUris) {
 }
 
 async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
-    const { exemptKeywords, includeGlobs, severity } = getConfig();
+    const { exemptKeywords, includeGlobs, severity,
+        enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules } = getConfig();
 
     // Reset tracked URIs so a re-run starts clean.
     workspaceValidatedUris.clear();
@@ -116,7 +137,9 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
                 const document = await vscode.workspace.openTextDocument(uri);
                 if (!matchesGlob(document.fileName, includeGlobs)) continue;
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
-                const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, { severity });
+                const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
+                    severity, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules
+                });
                 // Track this URI so onDidCloseTextDocument does not wipe its diagnostics.
                 workspaceValidatedUris.add(uri.toString());
                 totalSoql += soqlCount;

@@ -63,6 +63,26 @@
           "items": { "type": "string" },
           "default": ["dao"],
           "description": "Filename substrings identifying DAO files where SOQL/SOSL queries should be moved. Used to power the Quick Fix suggestion that navigates to the matching DAO."
+        },
+        "apexQueryValidator.enablePerformanceRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable performance rules (missing LIMIT, wide field list, SOQL in loop, unbounded large-object query, ORDER BY without LIMIT)."
+        },
+        "apexQueryValidator.enableSecurityRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable security rules (dynamic SOQL string concatenation, hardcoded Salesforce record IDs, unbound string literal in WHERE clause)."
+        },
+        "apexQueryValidator.enableStyleRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable style rules (SELECT Id only, aggregate without GROUP BY, SOSL without RETURNING, deprecated SIDEBAR scope). Style findings are always reported at Information severity."
+        },
+        "apexQueryValidator.enableGovernorRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable governor-limit rules (too many queries in one file, Database.query() calls, Database.search() / Search.query() calls)."
         }
       }
     }

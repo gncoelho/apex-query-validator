@@ -26,18 +26,100 @@ function extractSoslObjects(queryText) {
     return [...new Set(objects)];
 }
 
+// ---------------------------------------------------------------------------
+// Rule infrastructure
+// ---------------------------------------------------------------------------
+
+/**
+ * A rule object shape:
+ *   {
+ *     id:       string,                           // e.g. 'dao/soql-placement'
+ *     category: 'dao' | 'performance' | 'security' | 'style' | 'governor',
+ *     check:    (text: string) => Finding[]
+ *   }
+ *
+ * A Finding object shape:
+ *   {
+ *     ruleId:   string,
+ *     category: string,
+ *     message:  string,
+ *     start:    number,   // character offset in document text
+ *     end:      number,
+ *     type:     string,   // 'SOQL' | 'SOSL' | rule-specific label (for back-compat)
+ *     objects:  string[]  // SObject names (may be empty)
+ *   }
+ */
+
+const RULES = [
+    // --- DAO placement -------------------------------------------------------
+    {
+        id: 'dao/soql-placement',
+        category: 'dao',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                findings.push({
+                    ruleId: 'dao/soql-placement',
+                    category: 'dao',
+                    message: 'SOQL query should be moved to a DAO class.',
+                    start: m.index,
+                    end: m.index + m[0].length,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(m[0])
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'dao/sosl-placement',
+        category: 'dao',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOSL_PATTERN))) {
+                findings.push({
+                    ruleId: 'dao/sosl-placement',
+                    category: 'dao',
+                    message: 'SOSL query should be moved to a DAO class.',
+                    start: m.index,
+                    end: m.index + m[0].length,
+                    type: 'SOSL',
+                    objects: extractSoslObjects(m[0])
+                });
+            }
+            return findings;
+        }
+    }
+];
+
+/**
+ * Run all rules whose category is enabled and return every finding.
+ *
+ * @param {string} text - full document text
+ * @param {{ dao?: boolean, performance?: boolean, security?: boolean, style?: boolean, governor?: boolean }} enabledCategories
+ * @returns {Finding[]}
+ */
+function runRules(text, enabledCategories = {}) {
+    const findings = [];
+    for (const rule of RULES) {
+        if (enabledCategories[rule.category] === false) continue;
+        findings.push(...rule.check(text));
+    }
+    return findings;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy public API — preserved so existing callers and tests are unaffected
+// ---------------------------------------------------------------------------
+
 function findQueries(text) {
-    const results = [];
-
-    for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
-        results.push({ type: 'SOQL', match: m[0], start: m.index, end: m.index + m[0].length, objects: extractSoqlObjects(m[0]) });
-    }
-
-    for (const m of text.matchAll(freshRegex(SOSL_PATTERN))) {
-        results.push({ type: 'SOSL', match: m[0], start: m.index, end: m.index + m[0].length, objects: extractSoslObjects(m[0]) });
-    }
-
-    return results;
+    return runRules(text, { dao: true }).map(f => ({
+        type: f.type,
+        match: text.slice(f.start, f.end),
+        start: f.start,
+        end: f.end,
+        objects: f.objects
+    }));
 }
 
 function isExemptFile(fileName, exemptKeywords) {
@@ -95,6 +177,8 @@ function buildWorkspaceSummaryMessage(fileCount, soqlCount, soslCount) {
 module.exports = {
     SOQL_PATTERN,
     SOSL_PATTERN,
+    RULES,
+    runRules,
     extractSoqlObjects,
     extractSoslObjects,
     findQueries,

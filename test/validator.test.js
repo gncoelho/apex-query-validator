@@ -1,6 +1,7 @@
 const assert = require('assert');
 const {
     findQueries,
+    runRules,
     isExemptFile,
     isDaoFile,
     extractSoqlObjects,
@@ -253,6 +254,69 @@ suite('validator', () => {
 
         test('uses singular "file" for count of 1', () => {
             assert.ok(buildWorkspaceSummaryMessage(1, 0, 0).includes('1 file scanned'));
+        });
+    });
+
+    suite('runRules', () => {
+        test('returns no findings when no queries are present', () => {
+            const results = runRules('public class Foo {}', { dao: true });
+            assert.deepStrictEqual(results, []);
+        });
+
+        test('returns SOQL finding when dao category is enabled', () => {
+            const results = runRules('[SELECT Id FROM Account]', { dao: true });
+            assert.strictEqual(results.length, 1);
+            assert.strictEqual(results[0].ruleId, 'dao/soql-placement');
+            assert.strictEqual(results[0].category, 'dao');
+            assert.strictEqual(results[0].type, 'SOQL');
+        });
+
+        test('returns SOSL finding when dao category is enabled', () => {
+            const results = runRules("[FIND 'x' IN ALL FIELDS RETURNING Contact(Id)]", { dao: true });
+            assert.strictEqual(results.length, 1);
+            assert.strictEqual(results[0].ruleId, 'dao/sosl-placement');
+            assert.strictEqual(results[0].type, 'SOSL');
+        });
+
+        test('suppresses dao findings when dao category is disabled', () => {
+            const results = runRules('[SELECT Id FROM Account]', { dao: false });
+            assert.deepStrictEqual(results, []);
+        });
+
+        test('runs dao rules when category flag is absent (opt-out semantics)', () => {
+            // An absent key is treated as enabled — callers must explicitly set false to disable.
+            const results = runRules('[SELECT Id FROM Account]', {});
+            assert.strictEqual(results.length, 1);
+            assert.strictEqual(results[0].ruleId, 'dao/soql-placement');
+        });
+
+        test('enabling only dao category replicates findQueries behaviour', () => {
+            const text = "List<Account> a = [SELECT Id FROM Account]; [FIND 'x' IN ALL FIELDS]";
+            const fromRunRules = runRules(text, { dao: true });
+            const fromFindQueries = findQueries(text);
+            assert.strictEqual(fromRunRules.length, fromFindQueries.length);
+            for (let i = 0; i < fromRunRules.length; i++) {
+                assert.strictEqual(fromRunRules[i].start, fromFindQueries[i].start);
+                assert.strictEqual(fromRunRules[i].end, fromFindQueries[i].end);
+                assert.strictEqual(fromRunRules[i].type, fromFindQueries[i].type);
+            }
+        });
+
+        test('finding includes correct start/end offsets', () => {
+            const text = 'x = [SELECT Id FROM Account];';
+            const results = runRules(text, { dao: true });
+            assert.strictEqual(results.length, 1);
+            assert.strictEqual(text.slice(results[0].start, results[0].end), '[SELECT Id FROM Account]');
+        });
+
+        test('finding includes objects array', () => {
+            const results = runRules('[SELECT Id FROM Contact]', { dao: true });
+            assert.deepStrictEqual(results[0].objects, ['Contact']);
+        });
+
+        test('unknown categories in enabledCategories are ignored gracefully', () => {
+            const results = runRules('[SELECT Id FROM Account]', { dao: true, unknown: true });
+            assert.strictEqual(results.length, 1);
         });
     });
 });
