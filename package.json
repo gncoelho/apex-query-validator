@@ -64,6 +64,17 @@
           "default": ["dao"],
           "description": "Filename substrings identifying DAO files where SOQL/SOSL queries should be moved. Used to power the Quick Fix suggestion that navigates to the matching DAO."
         },
+        "apexQueryValidator.maxSelectFields": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum number of fields allowed in a SOQL SELECT clause before the perf/wide-field-list rule fires."
+        },
+        "apexQueryValidator.largeObjects": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["ContentDocument", "ContentVersion", "Task", "Event", "EmailMessage", "FeedItem"],
+          "description": "SObject names considered 'large'. A SOQL query on any of these objects without a WHERE clause triggers the perf/unbounded-large-object rule."
+        },
         "apexQueryValidator.enablePerformanceRules": {
           "type": "boolean",
           "default": true,

@@ -14,7 +14,7 @@ const {
 suite('validator', () => {
     suite('findQueries', () => {
         test('finds a single SOQL query with correct offsets', () => {
-            const text = "List<Account> a = [SELECT Id FROM Account];";
+            const text = "List<Account> a = [SELECT Id FROM Account LIMIT 1];";
             const results = findQueries(text);
             assert.strictEqual(results.length, 1);
             assert.strictEqual(results[0].type, 'SOQL');
@@ -22,7 +22,7 @@ suite('validator', () => {
         });
 
         test('returns distinct correct offsets for duplicate SOQL queries', () => {
-            const query = '[SELECT Id FROM Account]';
+            const query = '[SELECT Id FROM Account LIMIT 1]';
             const text = `List<Account> a1 = ${query}; List<Account> a2 = ${query};`;
             const results = findQueries(text);
             assert.strictEqual(results.length, 2);
@@ -264,7 +264,7 @@ suite('validator', () => {
         });
 
         test('returns SOQL finding when dao category is enabled', () => {
-            const results = runRules('[SELECT Id FROM Account]', { dao: true });
+            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: true, performance: false });
             assert.strictEqual(results.length, 1);
             assert.strictEqual(results[0].ruleId, 'dao/soql-placement');
             assert.strictEqual(results[0].category, 'dao');
@@ -279,13 +279,13 @@ suite('validator', () => {
         });
 
         test('suppresses dao findings when dao category is disabled', () => {
-            const results = runRules('[SELECT Id FROM Account]', { dao: false });
+            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: false, performance: false });
             assert.deepStrictEqual(results, []);
         });
 
         test('runs dao rules when category flag is absent (opt-out semantics)', () => {
             // An absent key is treated as enabled — callers must explicitly set false to disable.
-            const results = runRules('[SELECT Id FROM Account]', {});
+            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { performance: false });
             assert.strictEqual(results.length, 1);
             assert.strictEqual(results[0].ruleId, 'dao/soql-placement');
         });
@@ -303,10 +303,10 @@ suite('validator', () => {
         });
 
         test('finding includes correct start/end offsets', () => {
-            const text = 'x = [SELECT Id FROM Account];';
-            const results = runRules(text, { dao: true });
+            const text = 'x = [SELECT Id FROM Account LIMIT 1];';
+            const results = runRules(text, { dao: true, performance: false });
             assert.strictEqual(results.length, 1);
-            assert.strictEqual(text.slice(results[0].start, results[0].end), '[SELECT Id FROM Account]');
+            assert.strictEqual(text.slice(results[0].start, results[0].end), '[SELECT Id FROM Account LIMIT 1]');
         });
 
         test('finding includes objects array', () => {
@@ -315,8 +315,172 @@ suite('validator', () => {
         });
 
         test('unknown categories in enabledCategories are ignored gracefully', () => {
-            const results = runRules('[SELECT Id FROM Account]', { dao: true, unknown: true });
+            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: true, performance: false, unknown: true });
             assert.strictEqual(results.length, 1);
+        });
+    });
+
+    suite('perf/missing-limit', () => {
+        const cats = { performance: true, dao: false };
+
+        test('flags a SOQL query with no LIMIT', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats);
+            assert.strictEqual(r.length, 1);
+            assert.strictEqual(r[0].ruleId, 'perf/missing-limit');
+        });
+
+        test('does not flag a query that has LIMIT', () => {
+            assert.deepStrictEqual(runRules('[SELECT Id FROM Account LIMIT 10]', cats), []);
+        });
+
+        test('does not flag an aggregate query without LIMIT', () => {
+            assert.deepStrictEqual(runRules('[SELECT COUNT() FROM Account]', cats), []);
+        });
+
+        test('does not flag aggregate with SUM', () => {
+            assert.deepStrictEqual(runRules('[SELECT SUM(Amount) FROM Opportunity]', cats), []);
+        });
+
+        test('message mentions LIMIT and governor limits', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats);
+            assert.ok(r[0].message.includes('LIMIT'));
+            assert.ok(r[0].message.includes('governor'));
+        });
+
+        test('returns no findings when performance category is disabled', () => {
+            assert.deepStrictEqual(
+                runRules('[SELECT Id FROM Account]', { performance: false, dao: false }), []
+            );
+        });
+    });
+
+    suite('perf/wide-field-list', () => {
+        const cats = { performance: true, dao: false };
+        const manyFields = 'Id, Name, Phone, Email, Title, Department, AccountId, OwnerId, CreatedDate, LastModifiedDate, AnnualRevenue';
+
+        test('flags a query exceeding the default threshold of 10 fields', () => {
+            const r = runRules(`[SELECT ${manyFields} FROM Contact]`, cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/wide-field-list'));
+        });
+
+        test('does not flag a query within the threshold', () => {
+            const r = runRules('[SELECT Id, Name FROM Account]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/wide-field-list'));
+        });
+
+        test('respects a custom maxSelectFields option', () => {
+            const r = runRules('[SELECT Id, Name, Phone FROM Account]', cats, { maxSelectFields: 2 });
+            assert.ok(r.some(f => f.ruleId === 'perf/wide-field-list'));
+        });
+
+        test('does not flag when field count equals the threshold exactly', () => {
+            const twoFieldQuery = '[SELECT Id, Name FROM Account]';
+            const r = runRules(twoFieldQuery, cats, { maxSelectFields: 2 });
+            assert.ok(!r.some(f => f.ruleId === 'perf/wide-field-list'));
+        });
+
+        test('message includes field count and threshold', () => {
+            const r = runRules(`[SELECT ${manyFields} FROM Contact]`, cats);
+            const f = r.find(x => x.ruleId === 'perf/wide-field-list');
+            assert.ok(f.message.includes('fields'));
+            assert.ok(f.message.includes('10'));
+        });
+    });
+
+    suite('perf/soql-in-loop', () => {
+        const cats = { performance: true, dao: false };
+
+        test('flags a SOQL query directly inside a for loop body', () => {
+            const text = 'for (Integer i = 0; i < 10; i++) { Account a = [SELECT Id FROM Account LIMIT 1]; }';
+            const r = runRules(text, cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/soql-in-loop'));
+        });
+
+        test('flags a SOQL query inside a while loop body', () => {
+            const text = 'while (condition) { List<Account> a = [SELECT Id FROM Account LIMIT 1]; }';
+            const r = runRules(text, cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/soql-in-loop'));
+        });
+
+        test('does not flag a SOQL query outside any loop', () => {
+            const text = 'List<Account> a = [SELECT Id FROM Account LIMIT 1];';
+            const r = runRules(text, cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/soql-in-loop'));
+        });
+
+        test('flags a query inside a for-each loop', () => {
+            const text = 'for (Account a : accounts) { Contact c = [SELECT Id FROM Contact LIMIT 1]; }';
+            const r = runRules(text, cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/soql-in-loop'));
+        });
+
+        test('message mentions loop and governor limit', () => {
+            const text = 'for (Integer i = 0; i < 5; i++) { [SELECT Id FROM Account LIMIT 1]; }';
+            const r = runRules(text, cats);
+            const f = r.find(x => x.ruleId === 'perf/soql-in-loop');
+            assert.ok(f.message.includes('loop'));
+            assert.ok(f.message.includes('governor'));
+        });
+    });
+
+    suite('perf/unbounded-large-object', () => {
+        const cats = { performance: true, dao: false };
+
+        test('flags a query on a default large object with no WHERE', () => {
+            const r = runRules('[SELECT Id FROM Task]', cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/unbounded-large-object'));
+        });
+
+        test('does not flag when WHERE clause is present', () => {
+            const r = runRules("[SELECT Id FROM Task WHERE Status = 'Open']", cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/unbounded-large-object'));
+        });
+
+        test('does not flag a non-large object', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/unbounded-large-object'));
+        });
+
+        test('respects a custom largeObjects list', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats, { largeObjects: ['Account'] });
+            assert.ok(r.some(f => f.ruleId === 'perf/unbounded-large-object'));
+        });
+
+        test('matching is case-insensitive for SObject names', () => {
+            const r = runRules('[SELECT Id FROM task]', cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/unbounded-large-object'));
+        });
+
+        test('message includes the SObject name', () => {
+            const r = runRules('[SELECT Id FROM Event]', cats);
+            const f = r.find(x => x.ruleId === 'perf/unbounded-large-object');
+            assert.ok(f.message.includes('Event'));
+        });
+    });
+
+    suite('perf/order-by-no-limit', () => {
+        const cats = { performance: true, dao: false };
+
+        test('flags a query with ORDER BY and no LIMIT', () => {
+            const r = runRules('[SELECT Id FROM Account ORDER BY Name]', cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/order-by-no-limit'));
+        });
+
+        test('does not flag when ORDER BY has a LIMIT', () => {
+            const r = runRules('[SELECT Id FROM Account ORDER BY Name LIMIT 50]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/order-by-no-limit'));
+        });
+
+        test('does not flag a query with no ORDER BY', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/order-by-no-limit'));
+        });
+
+        test('message mentions ORDER BY and LIMIT', () => {
+            const r = runRules('[SELECT Id FROM Account ORDER BY Name]', cats);
+            const f = r.find(x => x.ruleId === 'perf/order-by-no-limit');
+            assert.ok(f.message.includes('ORDER BY'));
+            assert.ok(f.message.includes('LIMIT'));
         });
     });
 });

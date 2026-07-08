@@ -23,7 +23,9 @@ function getConfig() {
         enablePerformanceRules: config.get('enablePerformanceRules'),
         enableSecurityRules: config.get('enableSecurityRules'),
         enableStyleRules: config.get('enableStyleRules'),
-        enableGovernorRules: config.get('enableGovernorRules')
+        enableGovernorRules: config.get('enableGovernorRules'),
+        maxSelectFields: config.get('maxSelectFields'),
+        largeObjects: config.get('largeObjects')
     };
 }
 
@@ -40,7 +42,9 @@ function applyDocumentValidation(document, diagnosticCollection, {
     enablePerformanceRules,
     enableSecurityRules,
     enableStyleRules,
-    enableGovernorRules
+    enableGovernorRules,
+    maxSelectFields,
+    largeObjects
 }) {
     const text = document.getText();
     const findings = runRules(text, {
@@ -49,7 +53,7 @@ function applyDocumentValidation(document, diagnosticCollection, {
         security: enableSecurityRules,
         style: enableStyleRules,
         governor: enableGovernorRules
-    });
+    }, { maxSelectFields, largeObjects });
 
     const diagnostics = findings.map(({ message, start, end, category }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
@@ -77,7 +81,8 @@ function applyDocumentValidation(document, diagnosticCollection, {
 
 function runValidation(document, diagnosticCollection, { silent }) {
     const { exemptKeywords, includeGlobs, severity, autoValidate,
-        enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules } = getConfig();
+        enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+        maxSelectFields, largeObjects } = getConfig();
 
     if (!matchesGlob(document.fileName, includeGlobs)) {
         clearDocument(document, diagnosticCollection);
@@ -97,7 +102,8 @@ function runValidation(document, diagnosticCollection, { silent }) {
     }
 
     const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
-        severity, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules
+        severity, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+        maxSelectFields, largeObjects
     });
 
     if (!silent) {
@@ -113,7 +119,8 @@ function shouldClearOnClose(uriString, workspaceValidatedUris) {
 
 async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
     const { exemptKeywords, includeGlobs, severity,
-        enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules } = getConfig();
+        enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+        maxSelectFields, largeObjects } = getConfig();
 
     // Reset tracked URIs so a re-run starts clean.
     workspaceValidatedUris.clear();
@@ -138,7 +145,8 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
                 if (!matchesGlob(document.fileName, includeGlobs)) continue;
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
                 const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
-                    severity, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules
+                    severity, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+                    maxSelectFields, largeObjects
                 });
                 // Track this URI so onDidCloseTextDocument does not wipe its diagnostics.
                 workspaceValidatedUris.add(uri.toString());
