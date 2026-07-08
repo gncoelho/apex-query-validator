@@ -264,7 +264,7 @@ suite('validator', () => {
         });
 
         test('returns SOQL finding when dao category is enabled', () => {
-            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: true, performance: false });
+            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: true, performance: false, security: false, style: false });
             assert.strictEqual(results.length, 1);
             assert.strictEqual(results[0].ruleId, 'dao/soql-placement');
             assert.strictEqual(results[0].category, 'dao');
@@ -279,13 +279,13 @@ suite('validator', () => {
         });
 
         test('suppresses dao findings when dao category is disabled', () => {
-            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: false, performance: false });
+            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: false, performance: false, security: false, style: false });
             assert.deepStrictEqual(results, []);
         });
 
         test('runs dao rules when category flag is absent (opt-out semantics)', () => {
             // An absent key is treated as enabled — callers must explicitly set false to disable.
-            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { performance: false });
+            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { performance: false, security: false, style: false });
             assert.strictEqual(results.length, 1);
             assert.strictEqual(results[0].ruleId, 'dao/soql-placement');
         });
@@ -304,7 +304,7 @@ suite('validator', () => {
 
         test('finding includes correct start/end offsets', () => {
             const text = 'x = [SELECT Id FROM Account LIMIT 1];';
-            const results = runRules(text, { dao: true, performance: false });
+            const results = runRules(text, { dao: true, performance: false, security: false, style: false });
             assert.strictEqual(results.length, 1);
             assert.strictEqual(text.slice(results[0].start, results[0].end), '[SELECT Id FROM Account LIMIT 1]');
         });
@@ -315,22 +315,22 @@ suite('validator', () => {
         });
 
         test('unknown categories in enabledCategories are ignored gracefully', () => {
-            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: true, performance: false, unknown: true });
+            const results = runRules('[SELECT Id FROM Account LIMIT 1]', { dao: true, performance: false, security: false, style: false, unknown: true });
             assert.strictEqual(results.length, 1);
         });
     });
 
     suite('perf/missing-limit', () => {
-        const cats = { performance: true, dao: false };
+        const cats = { performance: true, dao: false, security: false, style: false };
 
         test('flags a SOQL query with no LIMIT', () => {
-            const r = runRules('[SELECT Id FROM Account]', cats);
+            const r = runRules('[SELECT Id, Name FROM Account]', cats);
             assert.strictEqual(r.length, 1);
             assert.strictEqual(r[0].ruleId, 'perf/missing-limit');
         });
 
         test('does not flag a query that has LIMIT', () => {
-            assert.deepStrictEqual(runRules('[SELECT Id FROM Account LIMIT 10]', cats), []);
+            assert.deepStrictEqual(runRules('[SELECT Id, Name FROM Account LIMIT 10]', cats), []);
         });
 
         test('does not flag an aggregate query without LIMIT', () => {
@@ -349,7 +349,7 @@ suite('validator', () => {
 
         test('returns no findings when performance category is disabled', () => {
             assert.deepStrictEqual(
-                runRules('[SELECT Id FROM Account]', { performance: false, dao: false }), []
+                runRules('[SELECT Id, Name FROM Account]', { performance: false, dao: false, security: false, style: false }), []
             );
         });
     });
@@ -589,6 +589,137 @@ suite('validator', () => {
             const r = runRules("[SELECT Id FROM Account WHERE Name = 'Acme' LIMIT 1]", cats);
             const f = r.find(x => x.ruleId === 'security/user-input-in-where');
             assert.ok(f.message.includes(':variable'));
+        });
+    });
+
+    suite('style/select-id-only', () => {
+        const cats = { style: true, dao: false, performance: false, security: false };
+
+        test('flags a query that selects only Id', () => {
+            const r = runRules('[SELECT Id FROM Account LIMIT 1]', cats);
+            assert.ok(r.some(f => f.ruleId === 'style/select-id-only'));
+        });
+
+        test('does not flag a query with multiple fields', () => {
+            const r = runRules('[SELECT Id, Name FROM Account LIMIT 1]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'style/select-id-only'));
+        });
+
+        test('is case-insensitive for Id field', () => {
+            const r = runRules('[SELECT ID FROM Account LIMIT 1]', cats);
+            assert.ok(r.some(f => f.ruleId === 'style/select-id-only'));
+        });
+
+        test('does not flag a query selecting Id with trailing whitespace handled', () => {
+            const r = runRules('[SELECT  Id  FROM Account LIMIT 1]', cats);
+            assert.ok(r.some(f => f.ruleId === 'style/select-id-only'));
+        });
+
+        test('finding has style category', () => {
+            const r = runRules('[SELECT Id FROM Account LIMIT 1]', cats);
+            assert.strictEqual(r.find(f => f.ruleId === 'style/select-id-only').category, 'style');
+        });
+
+        test('returns no findings when style category is disabled', () => {
+            const r = runRules('[SELECT Id FROM Account LIMIT 1]', { style: false });
+            assert.ok(!r.some(f => f.ruleId === 'style/select-id-only'));
+        });
+    });
+
+    suite('style/aggregate-missing-group-by', () => {
+        const cats = { style: true, dao: false, performance: false, security: false };
+
+        test('flags COUNT() in field list without GROUP BY', () => {
+            const r = runRules('[SELECT Name, COUNT(Id) FROM Account LIMIT 10]', cats);
+            assert.ok(r.some(f => f.ruleId === 'style/aggregate-missing-group-by'));
+        });
+
+        test('flags SUM() without GROUP BY', () => {
+            const r = runRules('[SELECT SUM(Amount) FROM Opportunity LIMIT 10]', cats);
+            assert.ok(r.some(f => f.ruleId === 'style/aggregate-missing-group-by'));
+        });
+
+        test('does not flag when GROUP BY is present', () => {
+            const r = runRules('[SELECT Name, COUNT(Id) FROM Account GROUP BY Name LIMIT 10]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'style/aggregate-missing-group-by'));
+        });
+
+        test('does not flag a query with no aggregate', () => {
+            const r = runRules('[SELECT Id, Name FROM Account LIMIT 1]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'style/aggregate-missing-group-by'));
+        });
+
+        test('flags AVG, MAX, MIN without GROUP BY', () => {
+            assert.ok(runRules('[SELECT AVG(Amount) FROM Opportunity LIMIT 1]', cats).some(f => f.ruleId === 'style/aggregate-missing-group-by'));
+            assert.ok(runRules('[SELECT MAX(Amount) FROM Opportunity LIMIT 1]', cats).some(f => f.ruleId === 'style/aggregate-missing-group-by'));
+            assert.ok(runRules('[SELECT MIN(Amount) FROM Opportunity LIMIT 1]', cats).some(f => f.ruleId === 'style/aggregate-missing-group-by'));
+        });
+
+        test('message mentions GROUP BY', () => {
+            const r = runRules('[SELECT COUNT(Id) FROM Account LIMIT 1]', cats);
+            const f = r.find(x => x.ruleId === 'style/aggregate-missing-group-by');
+            assert.ok(f.message.includes('GROUP BY'));
+        });
+    });
+
+    suite('style/sosl-no-returning', () => {
+        const cats = { style: true, dao: false, performance: false, security: false };
+
+        test('flags a SOSL query with no RETURNING clause', () => {
+            const r = runRules('[FIND "Acme" IN ALL FIELDS]', cats);
+            assert.ok(r.some(f => f.ruleId === 'style/sosl-no-returning'));
+        });
+
+        test('does not flag a SOSL query with a RETURNING clause', () => {
+            const r = runRules('[FIND "Acme" IN ALL FIELDS RETURNING Account(Id)]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'style/sosl-no-returning'));
+        });
+
+        test('finding has style category', () => {
+            const r = runRules('[FIND "x" IN ALL FIELDS]', cats);
+            assert.strictEqual(r.find(f => f.ruleId === 'style/sosl-no-returning').category, 'style');
+        });
+
+        test('message mentions RETURNING clause', () => {
+            const r = runRules('[FIND "x" IN ALL FIELDS]', cats);
+            const f = r.find(x => x.ruleId === 'style/sosl-no-returning');
+            assert.ok(f.message.includes('RETURNING'));
+        });
+
+        test('returns no findings when style category is disabled', () => {
+            const r = runRules('[FIND "x" IN ALL FIELDS]', { style: false });
+            assert.ok(!r.some(f => f.ruleId === 'style/sosl-no-returning'));
+        });
+    });
+
+    suite('style/sosl-sidebar-scope', () => {
+        const cats = { style: true, dao: false, performance: false, security: false };
+
+        test('flags a SOSL query using IN SIDEBAR FIELDS', () => {
+            const r = runRules('[FIND "Acme" IN SIDEBAR FIELDS]', cats);
+            assert.ok(r.some(f => f.ruleId === 'style/sosl-sidebar-scope'));
+        });
+
+        test('does not flag a SOSL query using IN ALL FIELDS', () => {
+            const r = runRules('[FIND "Acme" IN ALL FIELDS]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'style/sosl-sidebar-scope'));
+        });
+
+        test('does not flag IN NAME FIELDS', () => {
+            const r = runRules("[FIND 'x' IN NAME FIELDS RETURNING Contact(Id)]", cats);
+            assert.ok(!r.some(f => f.ruleId === 'style/sosl-sidebar-scope'));
+        });
+
+        test('is case-insensitive for SIDEBAR keyword', () => {
+            const r = runRules('[FIND "x" IN sidebar FIELDS]', cats);
+            assert.ok(r.some(f => f.ruleId === 'style/sosl-sidebar-scope'));
+        });
+
+        test('message mentions SIDEBAR and suggests alternatives', () => {
+            const r = runRules('[FIND "x" IN SIDEBAR FIELDS]', cats);
+            const f = r.find(x => x.ruleId === 'style/sosl-sidebar-scope');
+            assert.ok(f.message.includes('SIDEBAR'));
+            assert.ok(f.message.includes('ALL'));
         });
     });
 });

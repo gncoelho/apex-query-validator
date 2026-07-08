@@ -384,6 +384,94 @@ const RULES = [
             }
             return findings;
         }
+    },
+
+    // --- Style ---------------------------------------------------------------
+    {
+        id: 'style/select-id-only',
+        category: 'style',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const fieldList = extractFieldList(m[0]);
+                if (!fieldList) continue;
+                if (fieldList.trim().toLowerCase() !== 'id') continue;
+                findings.push({
+                    ruleId: 'style/select-id-only',
+                    category: 'style',
+                    message: 'SOQL query selects only Id — consider whether additional fields are needed to avoid a follow-up query.',
+                    start: m.index,
+                    end: m.index + m[0].length,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(m[0])
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'style/aggregate-missing-group-by',
+        category: 'style',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const fieldList = extractFieldList(q);
+                if (!fieldList) continue;
+                if (!/\b(COUNT|SUM|AVG|MAX|MIN)\s*\(/i.test(fieldList)) continue;
+                if (/\bGROUP\s+BY\b/i.test(q)) continue;
+                findings.push({
+                    ruleId: 'style/aggregate-missing-group-by',
+                    category: 'style',
+                    message: 'SOQL query uses an aggregate function without a GROUP BY clause — add GROUP BY or use COUNT() alone.',
+                    start: m.index,
+                    end: m.index + m[0].length,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(q)
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'style/sosl-no-returning',
+        category: 'style',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOSL_PATTERN))) {
+                if (/\bRETURNING\b/i.test(m[0])) continue;
+                findings.push({
+                    ruleId: 'style/sosl-no-returning',
+                    category: 'style',
+                    message: 'SOSL query has no RETURNING clause — without it all accessible objects and fields are returned, which is rarely intentional in production code.',
+                    start: m.index,
+                    end: m.index + m[0].length,
+                    type: 'SOSL',
+                    objects: []
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'style/sosl-sidebar-scope',
+        category: 'style',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOSL_PATTERN))) {
+                if (!/\bIN\s+SIDEBAR\s+FIELDS\b/i.test(m[0])) continue;
+                findings.push({
+                    ruleId: 'style/sosl-sidebar-scope',
+                    category: 'style',
+                    message: 'SOSL query uses the deprecated SIDEBAR search scope — replace it with ALL, NAME, EMAIL, or PHONE FIELDS.',
+                    start: m.index,
+                    end: m.index + m[0].length,
+                    type: 'SOSL',
+                    objects: extractSoslObjects(m[0])
+                });
+            }
+            return findings;
+        }
     }
 ];
 
