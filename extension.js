@@ -55,9 +55,11 @@ function applyDocumentValidation(document, diagnosticCollection, {
         governor: enableGovernorRules
     }, { maxSelectFields, largeObjects });
 
-    const diagnostics = findings.map(({ message, start, end, category }) => {
+    const diagnostics = findings.map(({ message, start, end, category, severity: findingSeverity }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
-        const diagSeverity = category === 'style' ? vscode.DiagnosticSeverity.Information : severity;
+        const diagSeverity = (category === 'style' || findingSeverity === 'information')
+            ? vscode.DiagnosticSeverity.Information
+            : severity;
         const diag = new vscode.Diagnostic(range, message, diagSeverity);
         diag.source = 'apexQueryValidator';
         return diag;

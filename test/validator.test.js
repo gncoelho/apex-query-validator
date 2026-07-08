@@ -291,8 +291,8 @@ suite('validator', () => {
         });
 
         test('enabling only dao category replicates findQueries behaviour', () => {
-            const text = "List<Account> a = [SELECT Id FROM Account]; [FIND 'x' IN ALL FIELDS]";
-            const fromRunRules = runRules(text, { dao: true });
+            const text = "List<Account> a = [SELECT Id FROM Account LIMIT 1]; [FIND 'x' IN ALL FIELDS]";
+            const fromRunRules = runRules(text, { dao: true, performance: false, security: false, style: false, governor: false });
             const fromFindQueries = findQueries(text);
             assert.strictEqual(fromRunRules.length, fromFindQueries.length);
             for (let i = 0; i < fromRunRules.length; i++) {
@@ -481,6 +481,114 @@ suite('validator', () => {
             const f = r.find(x => x.ruleId === 'perf/order-by-no-limit');
             assert.ok(f.message.includes('ORDER BY'));
             assert.ok(f.message.includes('LIMIT'));
+        });
+    });
+
+    suite('security/dynamic-soql-concat', () => {
+        const cats = { security: true, dao: false, performance: false };
+
+        test('flags Database.query() with string concatenation', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + objectName)", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('does not flag Database.query() with a plain variable (no concat)', () => {
+            const r = runRules('Database.query(queryString)', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('does not flag Database.query() with a string literal (no concat)', () => {
+            const r = runRules("Database.query('SELECT Id FROM Account LIMIT 10')", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('flags concatenation with spaces around the + operator', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + sobjectType + ' LIMIT 10')", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('is case-insensitive for DATABASE.QUERY', () => {
+            const r = runRules("DATABASE.QUERY('SELECT Id FROM ' + t)", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('message mentions injection risk and bind variables', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + obj)", cats);
+            const f = r.find(x => x.ruleId === 'security/dynamic-soql-concat');
+            assert.ok(f.message.toLowerCase().includes('injection'));
+            assert.ok(f.message.toLowerCase().includes('bind'));
+        });
+
+        test('returns no findings when security category is disabled', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + obj)", { security: false });
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+    });
+
+    suite('security/hardcoded-id', () => {
+        const cats = { security: true, dao: false, performance: false };
+
+        test('flags a 15-char Salesforce ID in a WHERE clause', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Id = '001000000000001' LIMIT 1]", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/hardcoded-id'));
+        });
+
+        test('flags an 18-char Salesforce ID in a WHERE clause', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Id = '001000000000001AAA' LIMIT 1]", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/hardcoded-id'));
+        });
+
+        test('does not flag a query with no WHERE clause', () => {
+            const r = runRules('[SELECT Id FROM Account LIMIT 1]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/hardcoded-id'));
+        });
+
+        test('does not flag a short string that is not a valid ID length', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name = 'Acme' LIMIT 1]", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/hardcoded-id'));
+        });
+
+        test('message includes the hardcoded ID value', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Id = '001000000000001' LIMIT 1]", cats);
+            const f = r.find(x => x.ruleId === 'security/hardcoded-id');
+            assert.ok(f.message.includes('001000000000001'));
+        });
+    });
+
+    suite('security/user-input-in-where', () => {
+        const cats = { security: true, dao: false, performance: false };
+
+        test('flags a WHERE clause with a string literal and no bind variable', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name = 'Acme' LIMIT 1]", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/user-input-in-where'));
+        });
+
+        test('does not flag a WHERE clause that uses a bind variable', () => {
+            const r = runRules('[SELECT Id FROM Account WHERE Name = :searchName LIMIT 1]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/user-input-in-where'));
+        });
+
+        test('does not flag a WHERE clause with both a literal and a bind variable', () => {
+            // Bind variable is present — considered safe
+            const r = runRules("[SELECT Id FROM Account WHERE Name = :n AND Type = 'Partner' LIMIT 1]", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/user-input-in-where'));
+        });
+
+        test('does not flag a query with no WHERE clause', () => {
+            const r = runRules('[SELECT Id FROM Account LIMIT 1]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/user-input-in-where'));
+        });
+
+        test('finding has information severity', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name = 'Acme' LIMIT 1]", cats);
+            const f = r.find(x => x.ruleId === 'security/user-input-in-where');
+            assert.strictEqual(f.severity, 'information');
+        });
+
+        test('message mentions bind variable syntax', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name = 'Acme' LIMIT 1]", cats);
+            const f = r.find(x => x.ruleId === 'security/user-input-in-where');
+            assert.ok(f.message.includes(':variable'));
         });
     });
 });

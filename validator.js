@@ -282,6 +282,108 @@ const RULES = [
             }
             return findings;
         }
+    },
+
+    // --- Security ------------------------------------------------------------
+    {
+        id: 'security/dynamic-soql-concat',
+        category: 'security',
+        check(text) {
+            const findings = [];
+            // Match Database.query( and scan forward to find the matching closing
+            // paren, then check whether any + operator appears inside the argument.
+            const callPattern = /Database\s*\.\s*query\s*\(/gi;
+            let m;
+            while ((m = callPattern.exec(text)) !== null) {
+                const argStart = m.index + m[0].length;
+                let depth = 1;
+                let argEnd = -1;
+                for (let i = argStart; i < text.length; i++) {
+                    if (text[i] === '(') depth++;
+                    else if (text[i] === ')') {
+                        depth--;
+                        if (depth === 0) { argEnd = i; break; }
+                    }
+                }
+                if (argEnd === -1) continue;
+                const arg = text.slice(argStart, argEnd);
+                if (!arg.includes('+')) continue;
+                findings.push({
+                    ruleId: 'security/dynamic-soql-concat',
+                    category: 'security',
+                    message: 'Database.query() argument uses string concatenation — this is a SOQL injection risk. Use bind variables instead.',
+                    start: m.index,
+                    end: argEnd + 1,
+                    type: 'dynamic-soql',
+                    objects: []
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'security/hardcoded-id',
+        category: 'security',
+        check(text) {
+            const findings = [];
+            // Salesforce ID: 15 or 18 alphanumeric characters enclosed in single quotes.
+            // Uses a combined pattern that first tries 18 chars then 15 to avoid
+            // the 15-char match always winning over the 18-char one.
+            const idPattern = /'([a-zA-Z0-9]{18}|[a-zA-Z0-9]{15})'/g;
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const whereMatch = /\bWHERE\b([\s\S]*)/i.exec(q);
+                if (!whereMatch) continue;
+                const whereClause = whereMatch[1];
+                idPattern.lastIndex = 0;
+                let idMatch;
+                // Absolute offset of the start of the WHERE clause content within the document
+                const whereClauseOffset = m.index + whereMatch.index + (whereMatch[0].length - whereClause.length);
+                while ((idMatch = idPattern.exec(whereClause)) !== null) {
+                    const id = idMatch[1];
+                    if (id.length !== 15 && id.length !== 18) continue;
+                    const idStart = whereClauseOffset + idMatch.index;
+                    findings.push({
+                        ruleId: 'security/hardcoded-id',
+                        category: 'security',
+                        message: `Hardcoded Salesforce ID '${id}' found in WHERE clause — use a named constant or variable instead so this works across orgs.`,
+                        start: idStart,
+                        end: idStart + idMatch[0].length,
+                        type: 'SOQL',
+                        objects: extractSoqlObjects(q)
+                    });
+                }
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'security/user-input-in-where',
+        category: 'security',
+        check(text) {
+            const findings = [];
+            const strLiteralInWhere = /'[^']*'/;
+            const bindVar = /:\s*\w+/;
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const whereMatch = /\bWHERE\b([\s\S]*)/i.exec(q);
+                if (!whereMatch) continue;
+                const whereClause = whereMatch[1];
+                if (!strLiteralInWhere.test(whereClause)) continue;
+                if (bindVar.test(whereClause)) continue; // bind variable present — OK
+                findings.push({
+                    ruleId: 'security/user-input-in-where',
+                    category: 'security',
+                    severity: 'information',
+                    message: 'SOQL WHERE clause contains an inline string literal with no bind variable — consider using :variable syntax to prevent injection.',
+                    start: m.index,
+                    end: m.index + m[0].length,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(q)
+                });
+            }
+            return findings;
+        }
     }
 ];
 
@@ -307,7 +409,7 @@ function runRules(text, enabledCategories = {}, options = {}) {
 // ---------------------------------------------------------------------------
 
 function findQueries(text) {
-    return runRules(text, { dao: true }).map(f => ({
+    return runRules(text, { dao: true, performance: false, security: false, style: false, governor: false }).map(f => ({
         type: f.type,
         match: text.slice(f.start, f.end),
         start: f.start,
