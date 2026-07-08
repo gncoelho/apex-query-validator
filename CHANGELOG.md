@@ -1,5 +1,16 @@
 # Change Log
 
+### v0.2.0
+
+- Added a rule registry (`runRules`) as the unified engine for all validation. The existing DAO-placement check is now a rule in the registry (`dao/soql-placement`, `dao/sosl-placement`).
+- Added four new rule categories, all enabled by default and individually togglable:
+  - **Performance** (`apexQueryValidator.enablePerformanceRules`): `perf/missing-limit`, `perf/wide-field-list`, `perf/soql-in-loop`, `perf/unbounded-large-object`, `perf/order-by-no-limit`.
+  - **Security** (`apexQueryValidator.enableSecurityRules`): `security/dynamic-soql-concat`, `security/hardcoded-id`, `security/user-input-in-where`.
+  - **Style** (`apexQueryValidator.enableStyleRules`): `style/select-id-only`, `style/aggregate-missing-group-by`, `style/sosl-no-returning`, `style/sosl-sidebar-scope`. Always reported at Information severity.
+  - **Governor limits** (`apexQueryValidator.enableGovernorRules`): `governor/too-many-queries`, `governor/dynamic-soql-call`, `governor/dynamic-sosl-call`.
+- Quality rules (performance, security, style, governor) apply to all files, including DAO and test files. Only the DAO-placement check is skipped for exempt files.
+- Added new configurable thresholds: `apexQueryValidator.maxSelectFields` (default: 10), `apexQueryValidator.largeObjects`, `apexQueryValidator.maxQueriesPerFile` (default: 5).
+
 ### v0.1.0
 
 - Fixed SOSL regex to match real Apex syntax (bracketed, quoted search term, valid field scopes); legacy unbracketed/curly-brace syntax is no longer matched.
