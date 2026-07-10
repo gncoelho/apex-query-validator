@@ -10,6 +10,11 @@ const decorationType = vscode.window.createTextEditorDecorationType({
     border: '1px solid yellow'
 });
 
+// Base URL for per-rule documentation. When set, diagnostic codes become
+// clickable links to the matching anchor; until docs anchors exist, keep it
+// null so the code is the plain rule id string (still usable as a stable key).
+const DOC_BASE_URL = null;
+
 function getConfig() {
     const config = vscode.workspace.getConfiguration('apexQueryValidator');
     return {
@@ -57,13 +62,20 @@ function applyDocumentValidation(document, diagnosticCollection, {
         governor: enableGovernorRules
     }, { maxSelectFields, largeObjects, maxQueriesPerFile });
 
-    const diagnostics = findings.map(({ message, start, end, category, severity: findingSeverity }) => {
+    const diagnostics = findings.map(({ ruleId, message, start, end, category, severity: findingSeverity }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
         const diagSeverity = (category === 'style' || findingSeverity === 'information')
             ? vscode.DiagnosticSeverity.Information
             : severity;
         const diag = new vscode.Diagnostic(range, message, diagSeverity);
         diag.source = 'apexQueryValidator';
+        // Expose the rule id so it appears in the Problems panel and gives Quick
+        // Fixes / suppression / per-rule config a stable key to target.
+        if (ruleId) {
+            diag.code = DOC_BASE_URL
+                ? { value: ruleId, target: vscode.Uri.parse(`${DOC_BASE_URL}#${ruleId.replace('/', '')}`) }
+                : ruleId;
+        }
         return diag;
     });
     diagnosticCollection.set(document.uri, diagnostics);

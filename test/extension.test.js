@@ -87,6 +87,41 @@ suite('Extension Test Suite', () => {
         }
     });
 
+    test('sets the rule id as the diagnostic code', async () => {
+        const fakeUri = vscode.Uri.file('/fake/CodeController.cls');
+        const fakeDocument = {
+            getText: () => '[SELECT Id FROM Account]',
+            fileName: '/fake/CodeController.cls',
+            uri: fakeUri,
+            positionAt: (offset) => new vscode.Position(0, offset)
+        };
+
+        const origFindFiles = vscode.workspace.findFiles;
+        const origOpenDoc = vscode.workspace.openTextDocument;
+        const origWithProgress = vscode.window.withProgress;
+        const origShowInfo = vscode.window.showInformationMessage;
+
+        vscode.workspace.findFiles = async () => [fakeUri];
+        vscode.workspace.openTextDocument = async () => fakeDocument;
+        vscode.window.withProgress = async (_opts, task) => task({ report: () => {} });
+        vscode.window.showInformationMessage = () => {};
+
+        try {
+            await vscode.commands.executeCommand('apex-query-validator.validateWorkspace');
+            const diagnostics = vscode.languages.getDiagnostics(fakeUri);
+            const placement = diagnostics.find(d => {
+                const code = typeof d.code === 'object' ? d.code.value : d.code;
+                return code === 'dao/soql-placement';
+            });
+            assert.ok(placement, 'Expected a diagnostic whose code is the dao/soql-placement rule id');
+        } finally {
+            vscode.workspace.findFiles = origFindFiles;
+            vscode.workspace.openTextDocument = origOpenDoc;
+            vscode.window.withProgress = origWithProgress;
+            vscode.window.showInformationMessage = origShowInfo;
+        }
+    });
+
     // --- shouldClearOnClose unit tests ---
 
     test('shouldClearOnClose returns true when URI is not workspace-validated', () => {
