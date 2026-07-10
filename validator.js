@@ -585,8 +585,93 @@ const RULES = [
     }
 ];
 
+// ---------------------------------------------------------------------------
+// Inline suppression
+// ---------------------------------------------------------------------------
+//
+// Developers can silence an intentional finding without disabling a whole
+// category, using ESLint-style comments:
+//
+//   // aqv-disable-next-line perf/missing-limit   -> next line only
+//   [SELECT Id FROM Account]
+//
+//   [SELECT Id FROM Account] // aqv-disable-line style/select-id-only, perf/missing-limit
+//
+//   // aqv-disable security                        -> whole file (by category)
+//
+// A directive with no ids listed suppresses every rule for that scope. Ids may
+// be rule ids (e.g. perf/missing-limit) or categories (e.g. performance) and
+// are separated by whitespace/commas. Text after ` -- ` is treated as a reason
+// and ignored.
+
+/** Returns an array of the character offset at which each 0-indexed line starts. */
+function buildLineStarts(text) {
+    const starts = [0];
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] === '\n') starts.push(i + 1);
+    }
+    return starts;
+}
+
+/** Maps a character offset to its 0-indexed line number via binary search. */
+function offsetToLine(lineStarts, pos) {
+    let lo = 0, hi = lineStarts.length - 1, ans = 0;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (lineStarts[mid] <= pos) { ans = mid; lo = mid + 1; }
+        else { hi = mid - 1; }
+    }
+    return ans;
+}
+
 /**
- * Run all rules whose category is enabled and return every finding.
+ * Parses all suppression directives out of the document.
+ * Returns `{ file: Entry[], byLine: Map<lineNumber, Entry[]> }` where an Entry is
+ * `{ all: boolean, ids: Set<string> }`.
+ */
+function collectSuppressions(text, lineStarts) {
+    const file = [];
+    const byLine = new Map();
+    const directive = /\/\/\s*aqv-disable(-next-line|-line)?\b[ \t]*([^\n]*)/gi;
+    let m;
+    while ((m = directive.exec(text)) !== null) {
+        const kind = m[1] ? m[1].toLowerCase() : '';
+        const rest = (m[2] || '').split(' -- ')[0];
+        const ids = rest.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+        const entry = { all: ids.length === 0, ids: new Set(ids) };
+        if (kind === '') {
+            file.push(entry);
+        } else {
+            const commentLine = offsetToLine(lineStarts, m.index);
+            const targetLine = kind === '-next-line' ? commentLine + 1 : commentLine;
+            if (!byLine.has(targetLine)) byLine.set(targetLine, []);
+            byLine.get(targetLine).push(entry);
+        }
+    }
+    return { file, byLine };
+}
+
+function suppressionMatches(entry, finding) {
+    return entry.all || entry.ids.has(finding.ruleId) || entry.ids.has(finding.category);
+}
+
+/** True when a suppression directive silences the given finding. */
+function isFindingSuppressed(finding, suppressions, lineStarts) {
+    for (const entry of suppressions.file) {
+        if (suppressionMatches(entry, finding)) return true;
+    }
+    const entries = suppressions.byLine.get(offsetToLine(lineStarts, finding.start));
+    if (entries) {
+        for (const entry of entries) {
+            if (suppressionMatches(entry, finding)) return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Run all rules whose category is enabled and return every finding, minus any
+ * silenced by inline suppression comments.
  *
  * @param {string} text - full document text
  * @param {{ dao?: boolean, performance?: boolean, security?: boolean, style?: boolean, governor?: boolean }} enabledCategories
@@ -599,7 +684,11 @@ function runRules(text, enabledCategories = {}, options = {}) {
         if (enabledCategories[rule.category] === false) continue;
         findings.push(...rule.check(text, options));
     }
-    return findings;
+
+    const lineStarts = buildLineStarts(text);
+    const suppressions = collectSuppressions(text, lineStarts);
+    if (!suppressions.file.length && !suppressions.byLine.size) return findings;
+    return findings.filter(f => !isFindingSuppressed(f, suppressions, lineStarts));
 }
 
 // ---------------------------------------------------------------------------
@@ -678,6 +767,9 @@ module.exports = {
     extractFieldList,
     skipStringLiteral,
     isInsideLoop,
+    buildLineStarts,
+    offsetToLine,
+    collectSuppressions,
     extractSoqlObjects,
     extractSoslObjects,
     findQueries,

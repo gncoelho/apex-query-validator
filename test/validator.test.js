@@ -6,6 +6,9 @@ const {
     extractFieldList,
     skipStringLiteral,
     isInsideLoop,
+    buildLineStarts,
+    offsetToLine,
+    collectSuppressions,
     isExemptFile,
     isDaoFile,
     extractSoqlObjects,
@@ -1101,6 +1104,115 @@ suite('validator', () => {
             const text = 'do { Integer x = 1; } while (cond); List<Account> a = [SELECT Id, Name FROM Account WHERE Id != null LIMIT 1];';
             const r = runRules(text, cats);
             assert.ok(!r.some(f => f.ruleId === 'perf/soql-in-loop'));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // Inline suppression
+    // -------------------------------------------------------------------------
+
+    suite('buildLineStarts / offsetToLine', () => {
+        const text = 'line0\nline1\nline2';
+        const starts = buildLineStarts(text);
+
+        test('records the start offset of each line', () => {
+            assert.deepStrictEqual(starts, [0, 6, 12]);
+        });
+
+        test('maps an offset on the first line to line 0', () => {
+            assert.strictEqual(offsetToLine(starts, 2), 0);
+        });
+
+        test('maps an offset on a later line correctly', () => {
+            assert.strictEqual(offsetToLine(starts, text.indexOf('line2')), 2);
+        });
+
+        test('maps the exact line-start offset to that line', () => {
+            assert.strictEqual(offsetToLine(starts, 6), 1);
+        });
+    });
+
+    suite('collectSuppressions', () => {
+        test('parses a file-level directive with a category', () => {
+            const text = '// aqv-disable performance';
+            const { file, byLine } = collectSuppressions(text, buildLineStarts(text));
+            assert.strictEqual(file.length, 1);
+            assert.strictEqual(byLine.size, 0);
+            assert.ok(file[0].ids.has('performance'));
+        });
+
+        test('parses a next-line directive targeting the following line', () => {
+            const text = '// aqv-disable-next-line perf/missing-limit\n[SELECT Id FROM Account]';
+            const { byLine } = collectSuppressions(text, buildLineStarts(text));
+            assert.ok(byLine.has(1));
+            assert.ok(byLine.get(1)[0].ids.has('perf/missing-limit'));
+        });
+
+        test('a bare directive marks the entry as "all"', () => {
+            const text = '// aqv-disable-next-line\n[SELECT Id FROM Account]';
+            const { byLine } = collectSuppressions(text, buildLineStarts(text));
+            assert.strictEqual(byLine.get(1)[0].all, true);
+        });
+    });
+
+    suite('runRules — inline suppression', () => {
+        const perf = { performance: true, dao: false, security: false, style: false, governor: false };
+
+        test('disable-next-line silences a specific rule on the following line', () => {
+            const text = '// aqv-disable-next-line perf/missing-limit\n[SELECT Id FROM Account]';
+            const r = runRules(text, perf);
+            assert.ok(!r.some(f => f.ruleId === 'perf/missing-limit'));
+        });
+
+        test('disable-line silences a finding on the same (trailing-comment) line', () => {
+            const text = '[SELECT Id FROM Account] // aqv-disable-line perf/missing-limit';
+            const r = runRules(text, perf);
+            assert.ok(!r.some(f => f.ruleId === 'perf/missing-limit'));
+        });
+
+        test('a directive for one rule leaves other rules on that line intact', () => {
+            const text = '// aqv-disable-next-line perf/missing-limit\n[SELECT Id FROM Account]';
+            const r = runRules(text, { performance: true, style: true, dao: false, security: false, governor: false });
+            assert.ok(!r.some(f => f.ruleId === 'perf/missing-limit'));
+            assert.ok(r.some(f => f.ruleId === 'style/select-id-only'));
+        });
+
+        test('a bare directive silences every rule on the following line', () => {
+            const text = '// aqv-disable-next-line\n[SELECT Id FROM Account]';
+            const r = runRules(text, { performance: true, style: true, dao: true, security: false, governor: false });
+            assert.deepStrictEqual(r, []);
+        });
+
+        test('a file-level directive silences all findings of a category', () => {
+            const text = '// aqv-disable performance\n[SELECT Id FROM Account]\n[SELECT Id FROM Contact]';
+            const r = runRules(text, perf);
+            assert.deepStrictEqual(r, []);
+        });
+
+        test('a file-level directive by rule id silences only that rule', () => {
+            const text = '// aqv-disable style/select-id-only\n[SELECT Id FROM Account]';
+            const r = runRules(text, { performance: true, style: true, dao: false, security: false, governor: false });
+            assert.ok(!r.some(f => f.ruleId === 'style/select-id-only'));
+            assert.ok(r.some(f => f.ruleId === 'perf/missing-limit'));
+        });
+
+        test('suppression only affects the targeted line', () => {
+            const text = '// aqv-disable-next-line perf/missing-limit\n[SELECT Id FROM Account]\n[SELECT Id FROM Contact]';
+            const r = runRules(text, perf);
+            assert.strictEqual(r.filter(f => f.ruleId === 'perf/missing-limit').length, 1);
+        });
+
+        test('supports comma-separated ids in one directive', () => {
+            const text = '// aqv-disable-next-line perf/missing-limit, style/select-id-only\n[SELECT Id FROM Account]';
+            const r = runRules(text, { performance: true, style: true, dao: false, security: false, governor: false });
+            assert.ok(!r.some(f => f.ruleId === 'perf/missing-limit'));
+            assert.ok(!r.some(f => f.ruleId === 'style/select-id-only'));
+        });
+
+        test('ignores a reason after " -- "', () => {
+            const text = '// aqv-disable-next-line perf/missing-limit -- admin-only batch query\n[SELECT Id FROM Account]';
+            const r = runRules(text, perf);
+            assert.ok(!r.some(f => f.ruleId === 'perf/missing-limit'));
         });
     });
 });
