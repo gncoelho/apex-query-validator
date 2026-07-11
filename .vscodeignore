@@ -1,9 +1,14 @@
 .vscode/**
 .vscode-test/**
+.claude/**
+.github/**
 test/**
 .gitignore
+.mocharc.json
 .yarnrc
 vsc-extension-quickstart.md
+new-validations-plan.md
+improvements-plan.md
 **/jsconfig.json
 **/*.map
 **/eslint.config.mjs
