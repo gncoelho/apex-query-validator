@@ -3,7 +3,7 @@ const path = require('path');
 const {
     runRules, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
     matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage,
-    splitTopLevelConcat, isConcatSegmentSafe
+    splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod
 } = require('./validator');
 
 const decorationType = vscode.window.createTextEditorDecorationType({
@@ -374,7 +374,7 @@ class QueryQuickFixProvider {
 async function buildDaoNavigationActions(document, ourDiagnostics) {
     const { daoKeywords, includeGlobs } = getConfig();
     const actions = [];
-    const suggestedUris = new Set();
+    const navigatedUris = new Set();
 
     for (const diagnostic of ourDiagnostics) {
         const queryText = document.getText(diagnostic.range);
@@ -384,21 +384,55 @@ async function buildDaoNavigationActions(document, ourDiagnostics) {
         ];
 
         const daoUris = await findDaoFilesForObjects(objects, { daoKeywords, includeGlobs });
+        const isPlacement = /placement$/.test(String(diagnosticRuleId(diagnostic) || ''));
 
         for (const uri of daoUris) {
-            const uriKey = uri.toString();
-            if (suggestedUris.has(uriKey)) continue;
-            suggestedUris.add(uriKey);
-
             const label = path.basename(uri.fsPath);
-            const action = new vscode.CodeAction(`Open ${label}`, vscode.CodeActionKind.QuickFix);
-            action.command = { command: 'vscode.open', title: `Open ${label}`, arguments: [uri] };
-            action.diagnostics = [diagnostic];
-            actions.push(action);
+
+            // Navigation suggestion (deduped per DAO file).
+            if (!navigatedUris.has(uri.toString())) {
+                navigatedUris.add(uri.toString());
+                const nav = new vscode.CodeAction(`Open ${label}`, vscode.CodeActionKind.QuickFix);
+                nav.command = { command: 'vscode.open', title: `Open ${label}`, arguments: [uri] };
+                nav.diagnostics = [diagnostic];
+                actions.push(nav);
+            }
+
+            // Method-stub generation, only for an inline bracket placement finding.
+            if (isPlacement && queryText.trim().startsWith('[')) {
+                const genAction = await buildDaoMethodAction(document, diagnostic, uri);
+                if (genAction) actions.push(genAction);
+            }
         }
     }
 
     return actions;
+}
+
+// Builds a multi-file edit that appends a DAO method wrapping the query and
+// replaces the inline query at the call site with a call to it. Exported for testing.
+async function buildDaoMethodAction(document, diagnostic, daoUri) {
+    const queryText = document.getText(diagnostic.range);
+    const objects = [...extractSoqlObjects(queryText), ...extractSoslObjects(queryText)];
+    const { methodName, code } = buildDaoMethod(queryText, objects[0] || null);
+
+    const daoDoc = await vscode.workspace.openTextDocument(daoUri);
+    const daoText = daoDoc.getText();
+    const closeIdx = daoText.lastIndexOf('}');
+    if (closeIdx === -1) return null;
+
+    const daoClassName = path.basename(daoUri.fsPath).replace(/\.(cls|trigger)$/i, '');
+    const edit = new vscode.WorkspaceEdit();
+    edit.insert(daoUri, daoDoc.positionAt(closeIdx), code);
+    edit.replace(document.uri, diagnostic.range, `${daoClassName}.${methodName}()`);
+
+    const action = new vscode.CodeAction(
+        `Move query to ${methodName}() in ${path.basename(daoUri.fsPath)}`,
+        vscode.CodeActionKind.QuickFix
+    );
+    action.edit = edit;
+    action.diagnostics = [diagnostic];
+    return action;
 }
 
 function activate(context) {
@@ -458,5 +492,6 @@ module.exports = {
     findDaoFilesForObjects,
     resolveSeverity,
     diagnosticRuleId,
-    QUICK_FIXES
+    QUICK_FIXES,
+    buildDaoMethodAction
 };

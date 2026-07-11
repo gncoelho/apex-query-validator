@@ -1,7 +1,7 @@
 const assert = require('assert');
 const vscode = require('vscode');
 const { buildWorkspaceSummaryMessage } = require('../validator');
-const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES } = require('../extension');
+const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction } = require('../extension');
 
 suite('Extension Test Suite', () => {
     suiteSetup(async () => {
@@ -239,6 +239,42 @@ suite('Extension Test Suite', () => {
             const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 17));
             const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
             assert.strictEqual(QUICK_FIXES['security/hardcoded-id'](doc, diag).length, 0);
+        });
+    });
+
+    suite('buildDaoMethodAction', () => {
+        test('inserts a DAO method and replaces the query with a call', async () => {
+            const daoUri = vscode.Uri.file('/project/AccountDAO.cls');
+            const daoText = 'public class AccountDAO {\n}';
+            const srcUri = vscode.Uri.file('/project/Foo.cls');
+            const srcDoc = { uri: srcUri, getText: (range) => (range ? '[SELECT Id FROM Account]' : 'x') };
+            const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 24));
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
+            diag.code = 'dao/soql-placement';
+
+            const origOpen = vscode.workspace.openTextDocument;
+            vscode.workspace.openTextDocument = async () => ({
+                getText: () => daoText,
+                positionAt: (offset) => {
+                    const before = daoText.slice(0, offset);
+                    const line = (before.match(/\n/g) || []).length;
+                    return new vscode.Position(line, offset - (before.lastIndexOf('\n') + 1));
+                }
+            });
+
+            try {
+                const action = await buildDaoMethodAction(srcDoc, diag, daoUri);
+                assert.ok(action, 'expected a code action');
+                assert.ok(action.title.includes('getAccounts()'));
+
+                const daoEdits = action.edit.get(daoUri);
+                assert.ok(daoEdits.some(e => /public static List<Account> getAccounts\(\)/.test(e.newText)));
+
+                const srcEdits = action.edit.get(srcUri);
+                assert.strictEqual(srcEdits[0].newText, 'AccountDAO.getAccounts()');
+            } finally {
+                vscode.workspace.openTextDocument = origOpen;
+            }
         });
     });
 

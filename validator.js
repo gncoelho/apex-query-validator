@@ -26,6 +26,34 @@ function extractSoslObjects(queryText) {
     return [...new Set(objects)];
 }
 
+/**
+ * Generates a DAO method that wraps a query. Returns `{ methodName, returnType, code }`.
+ * Return type/name are derived from the query shape:
+ *   - SOSL            -> List<List<SObject>> search<Object>()
+ *   - SELECT COUNT()  -> Integer count<Object>()
+ *   - otherwise       -> List<Object> get<Object>s()
+ */
+function buildDaoMethod(queryText, objectName) {
+    const name = objectName || 'Records';
+    const isSosl = /^\[\s*FIND\b/i.test(queryText.trim());
+    const isCount = /\bSELECT\s+COUNT\s*\(\s*\)/i.test(queryText);
+
+    let returnType, methodName;
+    if (isSosl) {
+        returnType = 'List<List<SObject>>';
+        methodName = `search${name}`;
+    } else if (isCount) {
+        returnType = 'Integer';
+        methodName = `count${name}`;
+    } else {
+        returnType = `List<${objectName || 'SObject'}>`;
+        methodName = `get${name}s`;
+    }
+
+    const code = `\n    public static ${returnType} ${methodName}() {\n        return ${queryText};\n    }\n`;
+    return { methodName, returnType, code };
+}
+
 // ---------------------------------------------------------------------------
 // Performance rule helpers
 // ---------------------------------------------------------------------------
@@ -1162,6 +1190,7 @@ module.exports = {
     bracketizeStaticDynamicQueries,
     extractSoqlObjects,
     extractSoslObjects,
+    buildDaoMethod,
     findQueries,
     isExemptFile,
     isDaoFile,

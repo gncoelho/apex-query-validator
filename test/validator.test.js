@@ -20,6 +20,7 @@ const {
     isDaoFile,
     extractSoqlObjects,
     extractSoslObjects,
+    buildDaoMethod,
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
@@ -1542,6 +1543,32 @@ suite('validator', () => {
             const text = 'for (Integer i = 0; i < 3; i++) { for (Integer j = 0; j < 3; j++) { Integer x = 1; } [SELECT Id FROM Account LIMIT 1]; }';
             const queryStart = text.lastIndexOf('[');
             assert.strictEqual(isInsideLoop(text, queryStart), true);
+        });
+    });
+
+    suite('buildDaoMethod', () => {
+        test('generates a List<Object> getter for a plain SOQL query', () => {
+            const { methodName, returnType, code } = buildDaoMethod('[SELECT Id FROM Account]', 'Account');
+            assert.strictEqual(returnType, 'List<Account>');
+            assert.strictEqual(methodName, 'getAccounts');
+            assert.ok(code.includes('public static List<Account> getAccounts()'));
+            assert.ok(code.includes('return [SELECT Id FROM Account];'));
+        });
+
+        test('generates an Integer counter for a COUNT() query', () => {
+            const { returnType, methodName } = buildDaoMethod('[SELECT COUNT() FROM Account]', 'Account');
+            assert.strictEqual(returnType, 'Integer');
+            assert.strictEqual(methodName, 'countAccount');
+        });
+
+        test('generates a List<List<SObject>> for a SOSL query', () => {
+            const { returnType } = buildDaoMethod("[FIND 'x' IN ALL FIELDS RETURNING Contact(Id)]", 'Contact');
+            assert.strictEqual(returnType, 'List<List<SObject>>');
+        });
+
+        test('falls back to SObject when no object name is known', () => {
+            const { returnType } = buildDaoMethod('[SELECT Id FROM Account]', null);
+            assert.strictEqual(returnType, 'List<SObject>');
         });
     });
 
