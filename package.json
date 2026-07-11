@@ -2,7 +2,7 @@
   "name": "apex-query-validator",
   "displayName": "apex-query-validator",
   "description": "Validating SOQL/SOSL Queries in Apex Classes Without 'DAO' or 'Test' in Name",
-  "version": "0.1.2",
+  "version": "0.3.0",
   "publisher": "gncoelho",
   "icon": "apex-query-validator.jpg",
   "license": "CC-BY-NC-4.0",
@@ -63,6 +63,76 @@
           "items": { "type": "string" },
           "default": ["dao"],
           "description": "Filename substrings identifying DAO files where SOQL/SOSL queries should be moved. Used to power the Quick Fix suggestion that navigates to the matching DAO."
+        },
+        "apexQueryValidator.maxQueriesPerFile": {
+          "type": "number",
+          "default": 5,
+          "description": "Maximum number of inline SOQL/SOSL queries allowed per file before the governor/too-many-queries rule fires."
+        },
+        "apexQueryValidator.maxSelectFields": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum number of fields allowed in a SOQL SELECT clause before the perf/wide-field-list rule fires."
+        },
+        "apexQueryValidator.maxSubqueries": {
+          "type": "number",
+          "default": 5,
+          "description": "Maximum number of child (relationship) subqueries allowed in one SOQL query before the perf/too-many-subqueries rule fires."
+        },
+        "apexQueryValidator.largeObjects": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["ContentDocument", "ContentVersion", "Task", "Event", "EmailMessage", "FeedItem"],
+          "description": "SObject names considered 'large'. A SOQL query on any of these objects without a WHERE clause triggers the perf/unbounded-large-object rule."
+        },
+        "apexQueryValidator.enableCorrectnessRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable correctness rules that catch guaranteed runtime/compile failures (e.g. a single-row query assignment without LIMIT 1)."
+        },
+        "apexQueryValidator.enablePerformanceRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable performance rules (missing LIMIT, wide field list, SOQL in loop, unbounded large-object query, ORDER BY without LIMIT)."
+        },
+        "apexQueryValidator.enableSecurityRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable security rules (dynamic SOQL string concatenation, hardcoded Salesforce record IDs, unbound string literal in WHERE clause)."
+        },
+        "apexQueryValidator.enableStyleRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable style rules (SELECT Id only, aggregate without GROUP BY, SOSL without RETURNING, deprecated SIDEBAR scope). Style findings are always reported at Information severity."
+        },
+        "apexQueryValidator.enableGovernorRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable governor-limit rules (too many queries in one file, Database.query() calls, Database.search() / Search.query() calls)."
+        },
+        "apexQueryValidator.enableMetadataRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable offline metadata rules that validate SObject and field names in SOQL against your project's local SFDX metadata (object/field-meta.xml). Only flags custom (__c) names it can positively disprove."
+        },
+        "apexQueryValidator.enforceSecurityClause": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in: flag inline SOQL queries that do not enforce field/object security via WITH SECURITY_ENFORCED, WITH USER_MODE, or WITH SYSTEM_MODE. Off by default because not every query should enforce sharing/FLS."
+        },
+        "apexQueryValidator.quickFixLimit": {
+          "type": "number",
+          "default": 200,
+          "description": "The LIMIT value inserted by the 'Add LIMIT' Quick Fix for queries missing a LIMIT clause."
+        },
+        "apexQueryValidator.rules": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["off", "information", "warning", "error"]
+          },
+          "description": "Per-rule overrides keyed by rule id (e.g. \"perf/missing-limit\"). Each value is \"off\", \"information\", \"warning\", or \"error\" and takes precedence over the category toggle and the global diagnosticSeverity. A severity value also forces the rule to run even when its category is disabled."
         }
       }
     }

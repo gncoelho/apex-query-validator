@@ -1,14 +1,43 @@
 const vscode = require('vscode');
 const path = require('path');
 const {
-    findQueries, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
-    matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage
+    runRules, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
+    matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage,
+    splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod, buildMetadataIndex, countQueriesByType
 } = require('./validator');
+const { STANDARD_OBJECTS, COMMON_STANDARD_FIELDS } = require('./metadata-baseline');
+
+// Cached offline object/field index, rebuilt lazily and invalidated by a
+// FileSystemWatcher on the SFDX metadata files.
+let metadataIndexCache = null;
+
+async function getMetadataIndex() {
+    if (metadataIndexCache) return metadataIndexCache;
+    const [objectUris, fieldUris] = await Promise.all([
+        vscode.workspace.findFiles('**/objects/**/*.object-meta.xml'),
+        vscode.workspace.findFiles('**/objects/**/fields/*.field-meta.xml')
+    ]);
+    metadataIndexCache = buildMetadataIndex(
+        objectUris.map(u => u.fsPath),
+        fieldUris.map(u => u.fsPath),
+        { standardObjects: STANDARD_OBJECTS, standardFields: COMMON_STANDARD_FIELDS }
+    );
+    return metadataIndexCache;
+}
+
+function invalidateMetadataIndex() {
+    metadataIndexCache = null;
+}
 
 const decorationType = vscode.window.createTextEditorDecorationType({
     backgroundColor: 'rgba(255, 255, 0, 0.2)',
     border: '1px solid yellow'
 });
+
+// Base URL for per-rule documentation. When set, diagnostic codes become
+// clickable links to the matching anchor; until docs anchors exist, keep it
+// null so the code is the plain rule id string (still usable as a stable key).
+const DOC_BASE_URL = null;
 
 function getConfig() {
     const config = vscode.workspace.getConfiguration('apexQueryValidator');
@@ -19,8 +48,44 @@ function getConfig() {
             ? vscode.DiagnosticSeverity.Error
             : vscode.DiagnosticSeverity.Warning,
         autoValidate: config.get('autoValidate'),
-        daoKeywords: config.get('daoFilenameKeywords')
+        daoKeywords: config.get('daoFilenameKeywords'),
+        enableCorrectnessRules: config.get('enableCorrectnessRules'),
+        enablePerformanceRules: config.get('enablePerformanceRules'),
+        enableSecurityRules: config.get('enableSecurityRules'),
+        enableStyleRules: config.get('enableStyleRules'),
+        enableGovernorRules: config.get('enableGovernorRules'),
+        enableMetadataRules: config.get('enableMetadataRules'),
+        maxSelectFields: config.get('maxSelectFields'),
+        largeObjects: config.get('largeObjects'),
+        maxQueriesPerFile: config.get('maxQueriesPerFile'),
+        maxSubqueries: config.get('maxSubqueries'),
+        enforceSecurityClause: config.get('enforceSecurityClause'),
+        quickFixLimit: config.get('quickFixLimit'),
+        ruleOverrides: config.get('rules') || {}
     };
+}
+
+// Maps a per-rule override string to a vscode severity, or null when the value
+// does not name a concrete severity ("off" / undefined / unknown).
+function severityFromString(value) {
+    switch (value) {
+        case 'error': return vscode.DiagnosticSeverity.Error;
+        case 'warning': return vscode.DiagnosticSeverity.Warning;
+        case 'information': return vscode.DiagnosticSeverity.Information;
+        default: return null;
+    }
+}
+
+// Resolves the severity for a finding.
+// Precedence: per-rule override > style/informational default > global severity.
+// Exported for testing.
+function resolveSeverity(finding, { ruleOverrides = {}, defaultSeverity }) {
+    const overridden = severityFromString(ruleOverrides[finding.ruleId]);
+    if (overridden !== null) return overridden;
+    if (finding.category === 'style' || finding.severity === 'information') {
+        return vscode.DiagnosticSeverity.Information;
+    }
+    return defaultSeverity;
 }
 
 function clearDocument(document, diagnosticCollection) {
@@ -31,14 +96,48 @@ function clearDocument(document, diagnosticCollection) {
     }
 }
 
-function applyDocumentValidation(document, diagnosticCollection, { severity }) {
+function applyDocumentValidation(document, diagnosticCollection, {
+    severity,
+    enableCorrectnessRules,
+    enablePerformanceRules,
+    enableSecurityRules,
+    enableStyleRules,
+    enableGovernorRules,
+    enableMetadataRules,
+    maxSelectFields,
+    largeObjects,
+    maxQueriesPerFile,
+    maxSubqueries,
+    enforceSecurityClause,
+    metadataIndex,
+    ruleOverrides = {}
+}) {
     const text = document.getText();
-    const matches = findQueries(text);
+    const findings = runRules(text, {
+        dao: true,
+        correctness: enableCorrectnessRules,
+        performance: enablePerformanceRules,
+        security: enableSecurityRules,
+        style: enableStyleRules,
+        governor: enableGovernorRules,
+        metadata: enableMetadataRules
+    }, { maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides });
 
-    const diagnostics = matches.map(({ type, start, end }) => {
+    const diagnostics = findings.map(({ ruleId, message, start, end, category, severity: findingSeverity }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
-        const diag = new vscode.Diagnostic(range, `${type} query should be moved to a DAO class.`, severity);
+        const diagSeverity = resolveSeverity(
+            { ruleId, category, severity: findingSeverity },
+            { ruleOverrides, defaultSeverity: severity }
+        );
+        const diag = new vscode.Diagnostic(range, message, diagSeverity);
         diag.source = 'apexQueryValidator';
+        // Expose the rule id so it appears in the Problems panel and gives Quick
+        // Fixes / suppression / per-rule config a stable key to target.
+        if (ruleId) {
+            diag.code = DOC_BASE_URL
+                ? { value: ruleId, target: vscode.Uri.parse(`${DOC_BASE_URL}#${ruleId.replace('/', '')}`) }
+                : ruleId;
+        }
         return diag;
     });
     diagnosticCollection.set(document.uri, diagnostics);
@@ -47,19 +146,18 @@ function applyDocumentValidation(document, diagnosticCollection, { severity }) {
         e => e.document.uri.toString() === document.uri.toString()
     );
     if (editor) {
-        editor.setDecorations(decorationType, matches.map(({ start, end }) => ({
+        editor.setDecorations(decorationType, findings.map(({ start, end }) => ({
             range: new vscode.Range(document.positionAt(start), document.positionAt(end))
         })));
     }
 
-    return {
-        soqlCount: matches.filter(m => m.type === 'SOQL').length,
-        soslCount: matches.filter(m => m.type === 'SOSL').length
-    };
+    return countQueriesByType(findings);
 }
 
-function runValidation(document, diagnosticCollection, { silent }) {
-    const { exemptKeywords, includeGlobs, severity, autoValidate } = getConfig();
+async function runValidation(document, diagnosticCollection, { silent }) {
+    const { exemptKeywords, includeGlobs, severity, autoValidate,
+        enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
+        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides } = getConfig();
 
     if (!matchesGlob(document.fileName, includeGlobs)) {
         clearDocument(document, diagnosticCollection);
@@ -78,7 +176,12 @@ function runValidation(document, diagnosticCollection, { silent }) {
         return;
     }
 
-    const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, { severity });
+    const metadataIndex = enableMetadataRules ? await getMetadataIndex() : null;
+
+    const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
+        severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
+        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides
+    });
 
     if (!silent) {
         vscode.window.showInformationMessage(buildSummaryMessage(soqlCount, soslCount));
@@ -92,7 +195,11 @@ function shouldClearOnClose(uriString, workspaceValidatedUris) {
 }
 
 async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
-    const { exemptKeywords, includeGlobs, severity } = getConfig();
+    const { exemptKeywords, includeGlobs, severity,
+        enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
+        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides } = getConfig();
+
+    const metadataIndex = enableMetadataRules ? await getMetadataIndex() : null;
 
     // Reset tracked URIs so a re-run starts clean.
     workspaceValidatedUris.clear();
@@ -116,7 +223,10 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
                 const document = await vscode.workspace.openTextDocument(uri);
                 if (!matchesGlob(document.fileName, includeGlobs)) continue;
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
-                const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, { severity });
+                const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
+                    severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
+                    maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides
+                });
                 // Track this URI so onDidCloseTextDocument does not wipe its diagnostics.
                 workspaceValidatedUris.add(uri.toString());
                 totalSoql += soqlCount;
@@ -156,39 +266,201 @@ async function findDaoFilesForObjects(objectNames, { daoKeywords, includeGlobs }
     return results;
 }
 
-class DaoSuggestionProvider {
+// Extracts the rule id carried on a diagnostic's `code` (string or {value}).
+function diagnosticRuleId(diagnostic) {
+    const code = diagnostic.code;
+    return (code && typeof code === 'object') ? code.value : code;
+}
+
+// Builds a single-range text-replacement Quick Fix.
+function makeReplaceAction(title, document, range, newText, diagnostic) {
+    const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+    action.edit = new vscode.WorkspaceEdit();
+    action.edit.replace(document.uri, range, newText);
+    action.diagnostics = [diagnostic];
+    return action;
+}
+
+// Inserts a trailing clause (e.g. `LIMIT 200`) into a bracket query, before an
+// existing OFFSET when present, otherwise just before the closing `]`.
+function insertTailClause(queryText, clause) {
+    const offsetIdx = queryText.search(/\s+OFFSET\b/i);
+    if (offsetIdx !== -1) {
+        return queryText.slice(0, offsetIdx) + ' ' + clause + queryText.slice(offsetIdx);
+    }
+    const closeIdx = queryText.lastIndexOf(']');
+    if (closeIdx === -1) return null;
+    return queryText.slice(0, closeIdx).replace(/\s+$/, '') + ' ' + clause + queryText.slice(closeIdx);
+}
+
+// Inserts `WITH SECURITY_ENFORCED` after any WHERE conditions but before
+// GROUP BY / ORDER BY / LIMIT / OFFSET (or the closing `]`).
+function insertSecurityClause(queryText) {
+    const m = /\s+(GROUP\s+BY|ORDER\s+BY|LIMIT|OFFSET)\b/i.exec(queryText);
+    if (m) {
+        return queryText.slice(0, m.index) + ' WITH SECURITY_ENFORCED' + queryText.slice(m.index);
+    }
+    const closeIdx = queryText.lastIndexOf(']');
+    if (closeIdx === -1) return null;
+    return queryText.slice(0, closeIdx).replace(/\s+$/, '') + ' WITH SECURITY_ENFORCED' + queryText.slice(closeIdx);
+}
+
+function addLimitFix(document, diagnostic) {
+    const text = document.getText(diagnostic.range);
+    if (/\bLIMIT\b/i.test(text)) return [];
+    const limit = getConfig().quickFixLimit || 200;
+    const replaced = insertTailClause(text, `LIMIT ${limit}`);
+    if (!replaced || replaced === text) return [];
+    return [makeReplaceAction(`Add LIMIT ${limit}`, document, diagnostic.range, replaced, diagnostic)];
+}
+
+// Wraps every unsafe concatenated segment of a dynamic query argument in
+// String.escapeSingleQuotes(...). The diagnostic range spans the whole call.
+function escapeConcatFix(document, diagnostic) {
+    const text = document.getText(diagnostic.range);
+    const openIdx = text.indexOf('(');
+    const closeIdx = text.lastIndexOf(')');
+    if (openIdx === -1 || closeIdx <= openIdx) return [];
+    const arg = text.slice(openIdx + 1, closeIdx);
+    const segments = splitTopLevelConcat(arg);
+    if (segments.length < 2) return [];
+    const wrapped = segments.map(s => isConcatSegmentSafe(s) ? s : `String.escapeSingleQuotes(${s})`);
+    const newText = text.slice(0, openIdx + 1) + wrapped.join(' + ') + text.slice(closeIdx);
+    if (newText === text) return [];
+    return [makeReplaceAction('Wrap variables in String.escapeSingleQuotes()', document, diagnostic.range, newText, diagnostic)];
+}
+
+// Extracts a hardcoded Salesforce Id literal into a class constant and replaces
+// the literal with a reference to it. Requires an enclosing class (returns no
+// fix for triggers or class-less snippets).
+function extractHardcodedIdFix(document, diagnostic) {
+    const literal = document.getText(diagnostic.range);
+    const whole = document.getText();
+    const classMatch = /\bclass\b[^{]*\{/i.exec(whole);
+    if (!classMatch) return [];
+    const constName = 'RECORD_ID';
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(document.uri, diagnostic.range, constName);
+    const insertPos = document.positionAt(classMatch.index + classMatch[0].length);
+    edit.insert(document.uri, insertPos, `\n    private static final Id ${constName} = ${literal};`);
+    const action = new vscode.CodeAction('Extract hardcoded Id to a constant', vscode.CodeActionKind.QuickFix);
+    action.edit = edit;
+    action.diagnostics = [diagnostic];
+    return [action];
+}
+
+// Registry of per-rule Quick Fixes, keyed by rule id. Each factory returns
+// CodeAction[] for a single diagnostic. Exported for testing.
+const QUICK_FIXES = {
+    'style/sosl-sidebar-scope': (document, diagnostic) => {
+        const text = document.getText(diagnostic.range);
+        const replaced = text.replace(/\bSIDEBAR\b/i, 'ALL');
+        if (replaced === text) return [];
+        return [makeReplaceAction('Replace SIDEBAR with ALL FIELDS', document, diagnostic.range, replaced, diagnostic)];
+    },
+    'perf/missing-limit': addLimitFix,
+    'perf/order-by-no-limit': addLimitFix,
+    'correctness/single-row-no-limit': (document, diagnostic) => {
+        const text = document.getText(diagnostic.range);
+        const replaced = /\bLIMIT\s+\d+/i.test(text)
+            ? text.replace(/\bLIMIT\s+\d+/i, 'LIMIT 1')
+            : insertTailClause(text, 'LIMIT 1');
+        if (!replaced || replaced === text) return [];
+        return [makeReplaceAction('Add LIMIT 1', document, diagnostic.range, replaced, diagnostic)];
+    },
+    'security/missing-security-enforced': (document, diagnostic) => {
+        const text = document.getText(diagnostic.range);
+        const replaced = insertSecurityClause(text);
+        if (!replaced || replaced === text) return [];
+        return [makeReplaceAction('Add WITH SECURITY_ENFORCED', document, diagnostic.range, replaced, diagnostic)];
+    },
+    'security/dynamic-soql-concat': escapeConcatFix,
+    'security/dynamic-sosl-concat': escapeConcatFix,
+    'security/hardcoded-id': extractHardcodedIdFix
+};
+
+class QueryQuickFixProvider {
     async provideCodeActions(document, _range, context) {
         const ourDiagnostics = context.diagnostics.filter(d => d.source === 'apexQueryValidator');
         if (!ourDiagnostics.length) return [];
 
-        const { daoKeywords, includeGlobs } = getConfig();
         const actions = [];
-        const suggestedUris = new Set();
 
+        // Registered per-rule Quick Fixes.
         for (const diagnostic of ourDiagnostics) {
-            const queryText = document.getText(diagnostic.range);
-            const objects = [
-                ...extractSoqlObjects(queryText),
-                ...extractSoslObjects(queryText)
-            ];
-
-            const daoUris = await findDaoFilesForObjects(objects, { daoKeywords, includeGlobs });
-
-            for (const uri of daoUris) {
-                const uriKey = uri.toString();
-                if (suggestedUris.has(uriKey)) continue;
-                suggestedUris.add(uriKey);
-
-                const label = path.basename(uri.fsPath);
-                const action = new vscode.CodeAction(`Open ${label}`, vscode.CodeActionKind.QuickFix);
-                action.command = { command: 'vscode.open', title: `Open ${label}`, arguments: [uri] };
-                action.diagnostics = [diagnostic];
-                actions.push(action);
-            }
+            const factory = QUICK_FIXES[diagnosticRuleId(diagnostic)];
+            if (factory) actions.push(...factory(document, diagnostic));
         }
+
+        // DAO navigation suggestions (existing behavior).
+        actions.push(...await buildDaoNavigationActions(document, ourDiagnostics));
 
         return actions;
     }
+}
+
+async function buildDaoNavigationActions(document, ourDiagnostics) {
+    const { daoKeywords, includeGlobs } = getConfig();
+    const actions = [];
+    const navigatedUris = new Set();
+
+    for (const diagnostic of ourDiagnostics) {
+        const queryText = document.getText(diagnostic.range);
+        const objects = [
+            ...extractSoqlObjects(queryText),
+            ...extractSoslObjects(queryText)
+        ];
+
+        const daoUris = await findDaoFilesForObjects(objects, { daoKeywords, includeGlobs });
+        const isPlacement = /placement$/.test(String(diagnosticRuleId(diagnostic) || ''));
+
+        for (const uri of daoUris) {
+            const label = path.basename(uri.fsPath);
+
+            // Navigation suggestion (deduped per DAO file).
+            if (!navigatedUris.has(uri.toString())) {
+                navigatedUris.add(uri.toString());
+                const nav = new vscode.CodeAction(`Open ${label}`, vscode.CodeActionKind.QuickFix);
+                nav.command = { command: 'vscode.open', title: `Open ${label}`, arguments: [uri] };
+                nav.diagnostics = [diagnostic];
+                actions.push(nav);
+            }
+
+            // Method-stub generation, only for an inline bracket placement finding.
+            if (isPlacement && queryText.trim().startsWith('[')) {
+                const genAction = await buildDaoMethodAction(document, diagnostic, uri);
+                if (genAction) actions.push(genAction);
+            }
+        }
+    }
+
+    return actions;
+}
+
+// Builds a multi-file edit that appends a DAO method wrapping the query and
+// replaces the inline query at the call site with a call to it. Exported for testing.
+async function buildDaoMethodAction(document, diagnostic, daoUri) {
+    const queryText = document.getText(diagnostic.range);
+    const objects = [...extractSoqlObjects(queryText), ...extractSoslObjects(queryText)];
+    const { methodName, code } = buildDaoMethod(queryText, objects[0] || null);
+
+    const daoDoc = await vscode.workspace.openTextDocument(daoUri);
+    const daoText = daoDoc.getText();
+    const closeIdx = daoText.lastIndexOf('}');
+    if (closeIdx === -1) return null;
+
+    const daoClassName = path.basename(daoUri.fsPath).replace(/\.(cls|trigger)$/i, '');
+    const edit = new vscode.WorkspaceEdit();
+    edit.insert(daoUri, daoDoc.positionAt(closeIdx), code);
+    edit.replace(document.uri, diagnostic.range, `${daoClassName}.${methodName}()`);
+
+    const action = new vscode.CodeAction(
+        `Move query to ${methodName}() in ${path.basename(daoUri.fsPath)}`,
+        vscode.CodeActionKind.QuickFix
+    );
+    action.edit = edit;
+    action.diagnostics = [diagnostic];
+    return action;
 }
 
 function activate(context) {
@@ -219,7 +491,7 @@ function activate(context) {
 
     const daoProviderDisposable = vscode.languages.registerCodeActionsProvider(
         [{ scheme: 'file', pattern: '**/*.cls' }, { scheme: 'file', pattern: '**/*.trigger' }],
-        new DaoSuggestionProvider(),
+        new QueryQuickFixProvider(),
         { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
     );
     context.subscriptions.push(daoProviderDisposable);
@@ -237,6 +509,13 @@ function activate(context) {
             diagnosticCollection.delete(document.uri);
         }
     }));
+
+    // Invalidate the cached metadata index when object/field files change.
+    const metadataWatcher = vscode.workspace.createFileSystemWatcher('**/objects/**/*-meta.xml');
+    metadataWatcher.onDidCreate(invalidateMetadataIndex);
+    metadataWatcher.onDidChange(invalidateMetadataIndex);
+    metadataWatcher.onDidDelete(invalidateMetadataIndex);
+    context.subscriptions.push(metadataWatcher);
 }
 
 function deactivate() {}
@@ -245,5 +524,11 @@ module.exports = {
     activate,
     deactivate,
     shouldClearOnClose,
-    findDaoFilesForObjects
+    findDaoFilesForObjects,
+    resolveSeverity,
+    diagnosticRuleId,
+    QUICK_FIXES,
+    buildDaoMethodAction,
+    getMetadataIndex,
+    invalidateMetadataIndex
 };

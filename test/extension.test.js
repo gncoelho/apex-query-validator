@@ -1,7 +1,7 @@
 const assert = require('assert');
 const vscode = require('vscode');
 const { buildWorkspaceSummaryMessage } = require('../validator');
-const { shouldClearOnClose, findDaoFilesForObjects } = require('../extension');
+const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction, getMetadataIndex, invalidateMetadataIndex } = require('../extension');
 
 suite('Extension Test Suite', () => {
     suiteSetup(async () => {
@@ -87,6 +87,63 @@ suite('Extension Test Suite', () => {
         }
     });
 
+    test('sets the rule id as the diagnostic code', async () => {
+        const fakeUri = vscode.Uri.file('/fake/CodeController.cls');
+        const fakeDocument = {
+            getText: () => '[SELECT Id FROM Account]',
+            fileName: '/fake/CodeController.cls',
+            uri: fakeUri,
+            positionAt: (offset) => new vscode.Position(0, offset)
+        };
+
+        const origFindFiles = vscode.workspace.findFiles;
+        const origOpenDoc = vscode.workspace.openTextDocument;
+        const origWithProgress = vscode.window.withProgress;
+        const origShowInfo = vscode.window.showInformationMessage;
+
+        vscode.workspace.findFiles = async () => [fakeUri];
+        vscode.workspace.openTextDocument = async () => fakeDocument;
+        vscode.window.withProgress = async (_opts, task) => task({ report: () => {} });
+        vscode.window.showInformationMessage = () => {};
+
+        try {
+            await vscode.commands.executeCommand('apex-query-validator.validateWorkspace');
+            const diagnostics = vscode.languages.getDiagnostics(fakeUri);
+            const placement = diagnostics.find(d => {
+                const code = typeof d.code === 'object' ? d.code.value : d.code;
+                return code === 'dao/soql-placement';
+            });
+            assert.ok(placement, 'Expected a diagnostic whose code is the dao/soql-placement rule id');
+        } finally {
+            vscode.workspace.findFiles = origFindFiles;
+            vscode.workspace.openTextDocument = origOpenDoc;
+            vscode.window.withProgress = origWithProgress;
+            vscode.window.showInformationMessage = origShowInfo;
+        }
+    });
+
+    suite('getMetadataIndex', () => {
+        test('builds and caches an index from workspace metadata files', async () => {
+            const origFindFiles = vscode.workspace.findFiles;
+            vscode.workspace.findFiles = async (glob) => {
+                if (String(glob).includes('object-meta')) {
+                    return [vscode.Uri.file('/p/objects/Broker__c/Broker__c.object-meta.xml')];
+                }
+                return [vscode.Uri.file('/p/objects/Broker__c/fields/Phone__c.field-meta.xml')];
+            };
+            try {
+                invalidateMetadataIndex();
+                const idx = await getMetadataIndex();
+                assert.ok(idx.objects.has('broker__c'));
+                assert.ok(idx.fieldsByObject.get('broker__c').has('phone__c'));
+                assert.ok(idx.objects.has('account'), 'baseline standard objects should be present');
+            } finally {
+                vscode.workspace.findFiles = origFindFiles;
+                invalidateMetadataIndex();
+            }
+        });
+    });
+
     // --- shouldClearOnClose unit tests ---
 
     test('shouldClearOnClose returns true when URI is not workspace-validated', () => {
@@ -101,6 +158,202 @@ suite('Extension Test Suite', () => {
 
     test('shouldClearOnClose returns true when the tracked set is empty', () => {
         assert.strictEqual(shouldClearOnClose('file:///a.cls', new Set()), true);
+    });
+
+    // --- Quick Fix tests ---
+
+    suite('diagnosticRuleId', () => {
+        test('reads a plain string code', () => {
+            assert.strictEqual(diagnosticRuleId({ code: 'style/sosl-sidebar-scope' }), 'style/sosl-sidebar-scope');
+        });
+
+        test('reads the value of an object code', () => {
+            assert.strictEqual(diagnosticRuleId({ code: { value: 'perf/missing-limit', target: 'x' } }), 'perf/missing-limit');
+        });
+    });
+
+    suite('QUICK_FIXES', () => {
+        const uri = vscode.Uri.file('/fake/Foo.cls');
+        function runFix(ruleId, queryText) {
+            const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, queryText.length));
+            const doc = { uri, getText: () => queryText };
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
+            const actions = QUICK_FIXES[ruleId](doc, diag);
+            return actions.length ? actions[0].edit.get(uri)[0].newText : null;
+        }
+
+        test('style/sosl-sidebar-scope replaces SIDEBAR with ALL', () => {
+            assert.strictEqual(runFix('style/sosl-sidebar-scope', '[FIND "x" IN SIDEBAR FIELDS]'), '[FIND "x" IN ALL FIELDS]');
+        });
+
+        test('perf/missing-limit inserts LIMIT before the closing bracket', () => {
+            assert.strictEqual(runFix('perf/missing-limit', '[SELECT Id FROM Account]'), '[SELECT Id FROM Account LIMIT 200]');
+        });
+
+        test('perf/missing-limit inserts LIMIT before an existing OFFSET', () => {
+            assert.strictEqual(runFix('perf/missing-limit', '[SELECT Id FROM Account OFFSET 10]'), '[SELECT Id FROM Account LIMIT 200 OFFSET 10]');
+        });
+
+        test('perf/order-by-no-limit inserts LIMIT after ORDER BY', () => {
+            assert.strictEqual(runFix('perf/order-by-no-limit', '[SELECT Id FROM Account ORDER BY Name]'), '[SELECT Id FROM Account ORDER BY Name LIMIT 200]');
+        });
+
+        test('correctness/single-row-no-limit inserts LIMIT 1', () => {
+            assert.strictEqual(runFix('correctness/single-row-no-limit', '[SELECT Id FROM Account]'), '[SELECT Id FROM Account LIMIT 1]');
+        });
+
+        test('correctness/single-row-no-limit replaces an existing LIMIT with 1', () => {
+            assert.strictEqual(runFix('correctness/single-row-no-limit', '[SELECT Id FROM Account LIMIT 5]'), '[SELECT Id FROM Account LIMIT 1]');
+        });
+
+        test('security/missing-security-enforced inserts before LIMIT', () => {
+            assert.strictEqual(
+                runFix('security/missing-security-enforced', "[SELECT Id FROM Account WHERE Name = 'x' LIMIT 10]"),
+                "[SELECT Id FROM Account WHERE Name = 'x' WITH SECURITY_ENFORCED LIMIT 10]"
+            );
+        });
+
+        test('security/missing-security-enforced inserts before the closing bracket', () => {
+            assert.strictEqual(runFix('security/missing-security-enforced', '[SELECT Id FROM Account]'), '[SELECT Id FROM Account WITH SECURITY_ENFORCED]');
+        });
+
+        test('security/dynamic-soql-concat wraps the variable in escapeSingleQuotes', () => {
+            assert.strictEqual(
+                runFix('security/dynamic-soql-concat', "Database.query('SELECT Id FROM ' + objectName)"),
+                "Database.query('SELECT Id FROM ' + String.escapeSingleQuotes(objectName))"
+            );
+        });
+
+        test('security/dynamic-sosl-concat wraps only the unsafe segment', () => {
+            assert.strictEqual(
+                runFix('security/dynamic-sosl-concat', "Search.query('FIND ' + term + ' IN ALL FIELDS')"),
+                "Search.query('FIND ' + String.escapeSingleQuotes(term) + ' IN ALL FIELDS')"
+            );
+        });
+
+        test('security/hardcoded-id extracts the id to a class constant', () => {
+            const whole = "public class Foo {\n    void m() { Account a = [SELECT Id FROM Account WHERE Id = '001000000000001' LIMIT 1]; }\n}";
+            const litText = "'001000000000001'";
+            const litStart = whole.indexOf(litText);
+            const doc = {
+                uri,
+                getText: (range) => (range ? litText : whole),
+                positionAt: (offset) => {
+                    const before = whole.slice(0, offset);
+                    const line = (before.match(/\n/g) || []).length;
+                    return new vscode.Position(line, offset - (before.lastIndexOf('\n') + 1));
+                }
+            };
+            const range = new vscode.Range(doc.positionAt(litStart), doc.positionAt(litStart + litText.length));
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
+            const actions = QUICK_FIXES['security/hardcoded-id'](doc, diag);
+            assert.strictEqual(actions.length, 1);
+            assert.ok(actions[0].title.toLowerCase().includes('constant'));
+            const edits = actions[0].edit.get(uri);
+            assert.strictEqual(edits.length, 2);
+            assert.ok(edits.some(e => e.newText === 'RECORD_ID'));
+            assert.ok(edits.some(e => /private static final Id RECORD_ID = '001000000000001';/.test(e.newText)));
+        });
+
+        test('security/hardcoded-id offers no fix without an enclosing class', () => {
+            const whole = "trigger Foo on Account (before insert) { }";
+            const doc = { uri, getText: (range) => (range ? "'001000000000001'" : whole), positionAt: () => new vscode.Position(0, 0) };
+            const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 17));
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
+            assert.strictEqual(QUICK_FIXES['security/hardcoded-id'](doc, diag).length, 0);
+        });
+    });
+
+    suite('buildDaoMethodAction', () => {
+        test('inserts a DAO method and replaces the query with a call', async () => {
+            const daoUri = vscode.Uri.file('/project/AccountDAO.cls');
+            const daoText = 'public class AccountDAO {\n}';
+            const srcUri = vscode.Uri.file('/project/Foo.cls');
+            const srcDoc = { uri: srcUri, getText: (range) => (range ? '[SELECT Id FROM Account]' : 'x') };
+            const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 24));
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
+            diag.code = 'dao/soql-placement';
+
+            const origOpen = vscode.workspace.openTextDocument;
+            vscode.workspace.openTextDocument = async () => ({
+                getText: () => daoText,
+                positionAt: (offset) => {
+                    const before = daoText.slice(0, offset);
+                    const line = (before.match(/\n/g) || []).length;
+                    return new vscode.Position(line, offset - (before.lastIndexOf('\n') + 1));
+                }
+            });
+
+            try {
+                const action = await buildDaoMethodAction(srcDoc, diag, daoUri);
+                assert.ok(action, 'expected a code action');
+                assert.ok(action.title.includes('getAccounts()'));
+
+                const daoEdits = action.edit.get(daoUri);
+                assert.ok(daoEdits.some(e => /public static List<Account> getAccounts\(\)/.test(e.newText)));
+
+                const srcEdits = action.edit.get(srcUri);
+                assert.strictEqual(srcEdits[0].newText, 'AccountDAO.getAccounts()');
+            } finally {
+                vscode.workspace.openTextDocument = origOpen;
+            }
+        });
+    });
+
+    // --- resolveSeverity tests ---
+
+    suite('resolveSeverity', () => {
+        const W = vscode.DiagnosticSeverity.Warning;
+
+        test('a per-rule override wins over everything', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'perf/missing-limit', category: 'performance' },
+                    { ruleOverrides: { 'perf/missing-limit': 'error' }, defaultSeverity: W }
+                ),
+                vscode.DiagnosticSeverity.Error
+            );
+        });
+
+        test('style category defaults to Information', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'style/select-id-only', category: 'style' },
+                    { ruleOverrides: {}, defaultSeverity: W }
+                ),
+                vscode.DiagnosticSeverity.Information
+            );
+        });
+
+        test('an override can raise a style rule above Information', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'style/select-id-only', category: 'style' },
+                    { ruleOverrides: { 'style/select-id-only': 'warning' }, defaultSeverity: W }
+                ),
+                vscode.DiagnosticSeverity.Warning
+            );
+        });
+
+        test('an information finding severity maps to Information', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'security/user-input-in-where', category: 'security', severity: 'information' },
+                    { ruleOverrides: {}, defaultSeverity: W }
+                ),
+                vscode.DiagnosticSeverity.Information
+            );
+        });
+
+        test('falls back to the global default severity', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'perf/missing-limit', category: 'performance' },
+                    { ruleOverrides: {}, defaultSeverity: W }
+                ),
+                W
+            );
+        });
     });
 
     // --- findDaoFilesForObjects tests ---
