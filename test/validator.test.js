@@ -550,6 +550,56 @@ suite('validator', () => {
         });
     });
 
+    suite('perf/count-via-size', () => {
+        const cats = { performance: true, dao: false, correctness: false, security: false, style: false, governor: false };
+
+        test('flags a query whose result is only used for .size()', () => {
+            const r = runRules('Integer n = [SELECT Id FROM Account].size();', cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/count-via-size'));
+        });
+
+        test('does not flag a query not followed by .size()', () => {
+            const r = runRules('List<Account> a = [SELECT Id FROM Account];', cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/count-via-size'));
+        });
+
+        test('finding has information severity', () => {
+            const r = runRules('Integer n = [SELECT Id FROM Account].size();', cats);
+            const f = r.find(x => x.ruleId === 'perf/count-via-size');
+            assert.strictEqual(f.severity, 'information');
+        });
+    });
+
+    suite('perf/too-many-subqueries', () => {
+        const cats = { performance: true, dao: false, correctness: false, security: false, style: false, governor: false };
+
+        test('flags when subquery count exceeds the threshold', () => {
+            const q = '[SELECT Id, (SELECT Id FROM Contacts), (SELECT Id FROM Opportunities) FROM Account]';
+            const r = runRules(q, cats, { maxSubqueries: 1 });
+            assert.ok(r.some(f => f.ruleId === 'perf/too-many-subqueries'));
+        });
+
+        test('does not flag at or below the threshold', () => {
+            const q = '[SELECT Id, (SELECT Id FROM Contacts) FROM Account]';
+            const r = runRules(q, cats, { maxSubqueries: 1 });
+            assert.ok(!r.some(f => f.ruleId === 'perf/too-many-subqueries'));
+        });
+
+        test('uses the default threshold of 5', () => {
+            const q = '[SELECT Id, (SELECT Id FROM Contacts), (SELECT Id FROM Cases) FROM Account]';
+            const r = runRules(q, cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/too-many-subqueries'));
+        });
+
+        test('message includes the count and threshold', () => {
+            const q = '[SELECT Id, (SELECT Id FROM Contacts), (SELECT Id FROM Opportunities) FROM Account]';
+            const r = runRules(q, cats, { maxSubqueries: 1 });
+            const f = r.find(x => x.ruleId === 'perf/too-many-subqueries');
+            assert.ok(f.message.includes('2'));
+            assert.ok(f.message.includes('1'));
+        });
+    });
+
     suite('security/dynamic-soql-concat', () => {
         const cats = { security: true, dao: false, performance: false };
 

@@ -626,6 +626,53 @@ const RULES = [
         }
     },
 
+    {
+        id: 'perf/count-via-size',
+        category: 'performance',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const end = m.index + m[0].length;
+                if (!/^\s*\.\s*size\s*\(\s*\)/i.test(text.slice(end))) continue;
+                findings.push({
+                    ruleId: 'perf/count-via-size',
+                    category: 'performance',
+                    severity: 'information',
+                    message: 'Querying rows only to call .size() loads every record — use SELECT COUNT() to count on the server instead.',
+                    start: m.index,
+                    end,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(m[0])
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'perf/too-many-subqueries',
+        category: 'performance',
+        check(text, options = {}) {
+            const max = options.maxSubqueries != null ? options.maxSubqueries : 5;
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const count = (q.match(/\(\s*SELECT\b/gi) || []).length;
+                if (count <= max) continue;
+                findings.push({
+                    ruleId: 'perf/too-many-subqueries',
+                    category: 'performance',
+                    severity: 'information',
+                    message: `SOQL query contains ${count} child subqueries (threshold: ${max}) — each subquery adds heap and query cost; consider splitting the query.`,
+                    start: m.index,
+                    end: m.index + q.length,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(q)
+                });
+            }
+            return findings;
+        }
+    },
+
     // --- Security ------------------------------------------------------------
     {
         id: 'security/dynamic-soql-concat',

@@ -33,6 +33,7 @@ function getConfig() {
         maxSelectFields: config.get('maxSelectFields'),
         largeObjects: config.get('largeObjects'),
         maxQueriesPerFile: config.get('maxQueriesPerFile'),
+        maxSubqueries: config.get('maxSubqueries'),
         enforceSecurityClause: config.get('enforceSecurityClause'),
         ruleOverrides: config.get('rules') || {}
     };
@@ -79,6 +80,7 @@ function applyDocumentValidation(document, diagnosticCollection, {
     maxSelectFields,
     largeObjects,
     maxQueriesPerFile,
+    maxSubqueries,
     enforceSecurityClause,
     ruleOverrides = {}
 }) {
@@ -90,7 +92,7 @@ function applyDocumentValidation(document, diagnosticCollection, {
         security: enableSecurityRules,
         style: enableStyleRules,
         governor: enableGovernorRules
-    }, { maxSelectFields, largeObjects, maxQueriesPerFile, enforceSecurityClause, ruleOverrides });
+    }, { maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides });
 
     const diagnostics = findings.map(({ ruleId, message, start, end, category, severity: findingSeverity }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
@@ -129,7 +131,7 @@ function applyDocumentValidation(document, diagnosticCollection, {
 function runValidation(document, diagnosticCollection, { silent }) {
     const { exemptKeywords, includeGlobs, severity, autoValidate,
         enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
-        maxSelectFields, largeObjects, maxQueriesPerFile, enforceSecurityClause, ruleOverrides } = getConfig();
+        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides } = getConfig();
 
     if (!matchesGlob(document.fileName, includeGlobs)) {
         clearDocument(document, diagnosticCollection);
@@ -150,7 +152,7 @@ function runValidation(document, diagnosticCollection, { silent }) {
 
     const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
         severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
-        maxSelectFields, largeObjects, maxQueriesPerFile, enforceSecurityClause, ruleOverrides
+        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides
     });
 
     if (!silent) {
@@ -167,7 +169,7 @@ function shouldClearOnClose(uriString, workspaceValidatedUris) {
 async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
     const { exemptKeywords, includeGlobs, severity,
         enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
-        maxSelectFields, largeObjects, maxQueriesPerFile, enforceSecurityClause, ruleOverrides } = getConfig();
+        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides } = getConfig();
 
     // Reset tracked URIs so a re-run starts clean.
     workspaceValidatedUris.clear();
@@ -193,7 +195,7 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
                 const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
                     severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
-                    maxSelectFields, largeObjects, maxQueriesPerFile, enforceSecurityClause, ruleOverrides
+                    maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides
                 });
                 // Track this URI so onDidCloseTextDocument does not wipe its diagnostics.
                 workspaceValidatedUris.add(uri.toString());

@@ -74,6 +74,11 @@
           "default": 10,
           "description": "Maximum number of fields allowed in a SOQL SELECT clause before the perf/wide-field-list rule fires."
         },
+        "apexQueryValidator.maxSubqueries": {
+          "type": "number",
+          "default": 5,
+          "description": "Maximum number of child (relationship) subqueries allowed in one SOQL query before the perf/too-many-subqueries rule fires."
+        },
         "apexQueryValidator.largeObjects": {
           "type": "array",
           "items": { "type": "string" },
