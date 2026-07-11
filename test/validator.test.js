@@ -633,6 +633,47 @@ suite('validator', () => {
         });
     });
 
+    suite('security/missing-security-enforced', () => {
+        const cats = { security: true, dao: false, correctness: false, performance: false, style: false, governor: false };
+        const on = { enforceSecurityClause: true };
+
+        test('does not fire by default (opt-in)', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/missing-security-enforced'));
+        });
+
+        test('flags a query with no security clause when enabled', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats, on);
+            assert.ok(r.some(f => f.ruleId === 'security/missing-security-enforced'));
+        });
+
+        test('does not flag a query with WITH SECURITY_ENFORCED', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name = 'x' WITH SECURITY_ENFORCED]", cats, on);
+            assert.ok(!r.some(f => f.ruleId === 'security/missing-security-enforced'));
+        });
+
+        test('does not flag a query with WITH USER_MODE', () => {
+            const r = runRules('[SELECT Id FROM Account WITH USER_MODE]', cats, on);
+            assert.ok(!r.some(f => f.ruleId === 'security/missing-security-enforced'));
+        });
+
+        test('does not flag a query with WITH SYSTEM_MODE (explicit opt-out)', () => {
+            const r = runRules('[SELECT Id FROM Account WITH SYSTEM_MODE]', cats, on);
+            assert.ok(!r.some(f => f.ruleId === 'security/missing-security-enforced'));
+        });
+
+        test('message suggests WITH SECURITY_ENFORCED', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats, on);
+            const f = r.find(x => x.ruleId === 'security/missing-security-enforced');
+            assert.ok(f.message.includes('WITH SECURITY_ENFORCED'));
+        });
+
+        test('respects the security category toggle', () => {
+            const r = runRules('[SELECT Id FROM Account]', { security: false }, on);
+            assert.ok(!r.some(f => f.ruleId === 'security/missing-security-enforced'));
+        });
+    });
+
     suite('security/hardcoded-id', () => {
         const cats = { security: true, dao: false, performance: false };
 

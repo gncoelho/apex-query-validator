@@ -105,6 +105,11 @@
           "default": true,
           "description": "Enable governor-limit rules (too many queries in one file, Database.query() calls, Database.search() / Search.query() calls)."
         },
+        "apexQueryValidator.enforceSecurityClause": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in: flag inline SOQL queries that do not enforce field/object security via WITH SECURITY_ENFORCED, WITH USER_MODE, or WITH SYSTEM_MODE. Off by default because not every query should enforce sharing/FLS."
+        },
         "apexQueryValidator.rules": {
           "type": "object",
           "default": {},

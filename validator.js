@@ -1,4 +1,4 @@
-const SOQL_PATTERN = /\[\s*SELECT\s+.+?\s+FROM\s+\w+(?:\s+WHERE\s+.+?)?(?:\s+GROUP\s+BY\s+.+?)?(?:\s+ORDER\s+BY\s+.+?)?(?:\s+LIMIT\s+\d+)?(?:\s+OFFSET\s+\d+)?\s*\]/gis;
+const SOQL_PATTERN = /\[\s*SELECT\s+.+?\s+FROM\s+\w+(?:\s+WHERE\s+.+?)?(?:\s+WITH\s+.+?)?(?:\s+GROUP\s+BY\s+.+?)?(?:\s+ORDER\s+BY\s+.+?)?(?:\s+LIMIT\s+\d+)?(?:\s+OFFSET\s+\d+)?\s*\]/gis;
 const SOSL_PATTERN = /\[\s*FIND\s+(?:'[^']*'|"[^"]*")\s+IN\s+(?:ALL|NAME|EMAIL|PHONE|SIDEBAR)\s+FIELDS\b[\s\S]*?\]/gi;
 
 function freshRegex(pattern) {
@@ -633,6 +633,29 @@ const RULES = [
                     end: call.argEnd + 1,
                     type: 'dynamic-sosl',
                     objects: []
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'security/missing-security-enforced',
+        category: 'security',
+        check(text, options = {}) {
+            // Opt-in: opinionated, so only runs when explicitly enabled.
+            if (options.enforceSecurityClause !== true) return [];
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                if (/\bWITH\s+(SECURITY_ENFORCED|USER_MODE|SYSTEM_MODE)\b/i.test(q)) continue;
+                findings.push({
+                    ruleId: 'security/missing-security-enforced',
+                    category: 'security',
+                    message: 'SOQL query does not enforce field/object security — add WITH SECURITY_ENFORCED or WITH USER_MODE (or WITH SYSTEM_MODE to opt out explicitly).',
+                    start: m.index,
+                    end: m.index + q.length,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(q)
                 });
             }
             return findings;
