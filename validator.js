@@ -275,6 +275,41 @@ function hasUnsafeConcat(argText) {
     return segments.some(s => !isConcatSegmentSafe(s));
 }
 
+/**
+ * Returns a copy of the text in which every dynamic query whose argument is a
+ * single string literal (e.g. `Database.query('SELECT ...')`) has that literal's
+ * surrounding quotes swapped for `[` and `]` — presenting it as a bracket query
+ * so the bracket-based rules apply to it. Only single characters are swapped, so
+ * every offset is preserved. Concatenated / multi-argument / bind calls are left
+ * untouched.
+ */
+function bracketizeStaticDynamicQueries(text) {
+    let chars = null;
+    for (const call of findDynamicQueryCalls(text)) {
+        if (call.argEnd === -1) continue;
+        const literal = call.argText.trim();
+        if (!/^'(?:\\.|[^'\\])*'$/.test(literal) && !/^"(?:\\.|[^"\\])*"$/.test(literal)) continue;
+        const quote = literal[0];
+        const openRel = call.argText.indexOf(quote);
+        const closeRel = call.argText.lastIndexOf(quote);
+        if (openRel === closeRel) continue;
+        if (!chars) chars = text.split('');
+        chars[call.argStart + openRel] = '[';
+        chars[call.argStart + closeRel] = ']';
+    }
+    return chars ? chars.join('') : text;
+}
+
+// Rules that scan for dynamic query CALL SITES (not bracket queries) must see the
+// original text so their string-literal-aware paren walking stays correct; all
+// other (bracket-query) rules see the bracketized text.
+const DYNAMIC_CALL_RULE_IDS = new Set([
+    'governor/dynamic-soql-call',
+    'governor/dynamic-sosl-call',
+    'security/dynamic-soql-concat',
+    'security/dynamic-sosl-concat'
+]);
+
 // ---------------------------------------------------------------------------
 // Rule infrastructure
 // ---------------------------------------------------------------------------
@@ -920,12 +955,14 @@ function isFindingSuppressed(finding, suppressions, lineStarts) {
  */
 function runRules(text, enabledCategories = {}, options = {}) {
     const overrides = options.ruleOverrides || {};
+    const scanText = bracketizeStaticDynamicQueries(text);
     const findings = [];
     for (const rule of RULES) {
         const override = overrides[rule.id];
         if (override === 'off') continue;
         if (override == null && enabledCategories[rule.category] === false) continue;
-        findings.push(...rule.check(text, options));
+        const ruleText = DYNAMIC_CALL_RULE_IDS.has(rule.id) ? text : scanText;
+        findings.push(...rule.check(ruleText, options));
     }
 
     const lineStarts = buildLineStarts(text);
@@ -1021,6 +1058,7 @@ module.exports = {
     splitTopLevelConcat,
     isConcatSegmentSafe,
     hasUnsafeConcat,
+    bracketizeStaticDynamicQueries,
     extractSoqlObjects,
     extractSoslObjects,
     findQueries,

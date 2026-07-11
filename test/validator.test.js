@@ -15,6 +15,7 @@ const {
     findDynamicQueryCalls,
     hasUnquotedPlus,
     hasUnsafeConcat,
+    bracketizeStaticDynamicQueries,
     isExemptFile,
     isDaoFile,
     extractSoqlObjects,
@@ -1191,6 +1192,66 @@ suite('validator', () => {
         test('distinguishes query from queryWithBinds (two soql findings)', () => {
             const r = runRules('Database.query(a); Database.queryWithBinds(b, m, AccessLevel.USER_MODE);', gov);
             assert.strictEqual(r.filter(f => f.ruleId === 'governor/dynamic-soql-call').length, 2);
+        });
+    });
+
+    suite('rules applied to static-string dynamic queries', () => {
+        test('flags DAO placement for a static Database.query string', () => {
+            const r = runRules("Database.query('SELECT Id FROM Account')",
+                { dao: true, correctness: false, performance: false, security: false, style: false, governor: false });
+            assert.ok(r.some(f => f.ruleId === 'dao/soql-placement'));
+        });
+
+        test('flags missing LIMIT for a static Database.query string', () => {
+            const r = runRules("Database.query('SELECT Id FROM Account')",
+                { performance: true, dao: false, correctness: false, security: false, style: false, governor: false });
+            assert.ok(r.some(f => f.ruleId === 'perf/missing-limit'));
+        });
+
+        test('does not apply bracket rules to a concatenated dynamic query', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + obj)",
+                { performance: true, dao: true, correctness: false, security: false, style: false, governor: false });
+            assert.ok(!r.some(f => f.ruleId === 'perf/missing-limit'));
+            assert.ok(!r.some(f => f.ruleId === 'dao/soql-placement'));
+        });
+
+        test('offsets of a virtual finding point into the real document', () => {
+            const text = "Database.query('SELECT Id FROM Account')";
+            const r = runRules(text, { dao: true, correctness: false, performance: false, security: false, style: false, governor: false });
+            const f = r.find(x => x.ruleId === 'dao/soql-placement');
+            assert.strictEqual(text[f.start], "'");
+            assert.strictEqual(text.slice(f.start + 1, f.end - 1), 'SELECT Id FROM Account');
+        });
+
+        test('still detects the dynamic call itself via the governor rule', () => {
+            const r = runRules("Database.query('SELECT Id FROM Account')",
+                { governor: true, dao: false, correctness: false, performance: false, security: false, style: false });
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+
+        test('does not flag concat injection for a fully static string', () => {
+            const r = runRules("Database.query('SELECT Id FROM Account')",
+                { security: true, dao: false, correctness: false, performance: false, style: false, governor: false });
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+    });
+
+    suite('bracketizeStaticDynamicQueries', () => {
+        test('swaps the literal quotes for brackets, preserving length', () => {
+            const input = "Database.query('SELECT Id FROM Account')";
+            const out = bracketizeStaticDynamicQueries(input);
+            assert.strictEqual(out.length, input.length);
+            assert.strictEqual(out, 'Database.query([SELECT Id FROM Account])');
+        });
+
+        test('leaves concatenated arguments untouched', () => {
+            const input = "Database.query('SELECT Id FROM ' + obj)";
+            assert.strictEqual(bracketizeStaticDynamicQueries(input), input);
+        });
+
+        test('leaves text without dynamic calls untouched', () => {
+            const input = 'List<Account> a = [SELECT Id FROM Account];';
+            assert.strictEqual(bracketizeStaticDynamicQueries(input), input);
         });
     });
 
