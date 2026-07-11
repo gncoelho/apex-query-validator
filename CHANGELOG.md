@@ -1,5 +1,19 @@
 # Change Log
 
+### v0.3.0
+
+- Added two new rule categories:
+  - **Correctness** (`apexQueryValidator.enableCorrectnessRules`): `correctness/single-row-no-limit`, `correctness/offset-too-large`, `correctness/sosl-min-length`, `correctness/fields-macro-needs-limit`.
+  - **Metadata** (`apexQueryValidator.enableMetadataRules`): `metadata/unknown-object`, `metadata/unknown-field` — validate SObject/field names against local SFDX metadata, fully offline. Only flags custom (`__c`) names that can be positively disproven.
+- Added performance rules `perf/non-selective-filter`, `perf/count-via-size`, `perf/too-many-subqueries` (all Information severity; new threshold `apexQueryValidator.maxSubqueries`).
+- Added security rule `security/dynamic-sosl-concat` and opt-in `security/missing-security-enforced` (`apexQueryValidator.enforceSecurityClause`).
+- Broadened dynamic-query detection to `Database.getQueryLocator`, `countQuery`, and their `*WithBinds` variants; the concat rules now ignore `*WithBinds` calls and values already wrapped in `String.escapeSingleQuotes()`.
+- Placement, LIMIT, and hardcoded-id rules now also apply to static-string dynamic queries (`Database.query('SELECT …')`).
+- Added **inline suppression** comments (`// aqv-disable[-line|-next-line] <rule|category>`).
+- Added **per-rule overrides** via `apexQueryValidator.rules` (`off`/`information`/`warning`/`error`); each finding now carries its rule id as the diagnostic `code`.
+- Added **Quick Fixes**: add `LIMIT`/`LIMIT 1`, add `WITH SECURITY_ENFORCED`, wrap in `String.escapeSingleQuotes()`, extract a hardcoded Id to a constant, replace deprecated `SIDEBAR`, and generate a DAO method + call (new setting `apexQueryValidator.quickFixLimit`).
+- Tightened `security/hardcoded-id` to require a digit in the Id key prefix, and fixed the summary popup to count dynamic queries.
+
 ### v0.2.0
 
 - Added a rule registry (`runRules`) as the unified engine for all validation. The existing DAO-placement check is now a rule in the registry (`dao/soql-placement`, `dao/sosl-placement`).
