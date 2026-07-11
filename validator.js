@@ -1,4 +1,4 @@
-const SOQL_PATTERN = /\[\s*SELECT\s+.+?\s+FROM\s+\w+(?:\s+WHERE\s+.+?)?(?:\s+GROUP\s+BY\s+.+?)?(?:\s+ORDER\s+BY\s+.+?)?(?:\s+LIMIT\s+\d+)?\s*\]/gis;
+const SOQL_PATTERN = /\[\s*SELECT\s+.+?\s+FROM\s+\w+(?:\s+WHERE\s+.+?)?(?:\s+GROUP\s+BY\s+.+?)?(?:\s+ORDER\s+BY\s+.+?)?(?:\s+LIMIT\s+\d+)?(?:\s+OFFSET\s+\d+)?\s*\]/gis;
 const SOSL_PATTERN = /\[\s*FIND\s+(?:'[^']*'|"[^"]*")\s+IN\s+(?:ALL|NAME|EMAIL|PHONE|SIDEBAR)\s+FIELDS\b[\s\S]*?\]/gi;
 
 function freshRegex(pattern) {
@@ -239,6 +239,30 @@ const RULES = [
                     message: 'SOQL query result is used as a single record without LIMIT 1 — this throws a QueryException if it returns 0 or more than 1 row. Add LIMIT 1.',
                     start: m.index,
                     end,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(q)
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'correctness/offset-too-large',
+        category: 'correctness',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const offsetMatch = /\bOFFSET\s+(\d+)/i.exec(q);
+                if (!offsetMatch) continue;
+                const value = parseInt(offsetMatch[1], 10);
+                if (value <= 2000) continue;
+                findings.push({
+                    ruleId: 'correctness/offset-too-large',
+                    category: 'correctness',
+                    message: `SOQL OFFSET of ${value} exceeds the maximum of 2000 — this throws a runtime error. Reduce OFFSET or switch to keyset (Id-based) pagination.`,
+                    start: m.index,
+                    end: m.index + q.length,
                     type: 'SOQL',
                     objects: extractSoqlObjects(q)
                 });

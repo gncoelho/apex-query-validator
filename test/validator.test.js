@@ -928,6 +928,47 @@ suite('validator', () => {
         });
     });
 
+    suite('correctness/offset-too-large', () => {
+        const cats = { correctness: true, dao: false, performance: false, security: false, style: false, governor: false };
+
+        test('flags OFFSET greater than 2000', () => {
+            const r = runRules('[SELECT Id FROM Account ORDER BY Name LIMIT 10 OFFSET 2001]', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/offset-too-large'));
+        });
+
+        test('does not flag OFFSET equal to 2000', () => {
+            const r = runRules('[SELECT Id FROM Account ORDER BY Name LIMIT 10 OFFSET 2000]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/offset-too-large'));
+        });
+
+        test('does not flag a query with no OFFSET', () => {
+            const r = runRules('[SELECT Id FROM Account LIMIT 10]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/offset-too-large'));
+        });
+
+        test('flags OFFSET without a preceding LIMIT clause', () => {
+            const r = runRules('[SELECT Id FROM Account OFFSET 5000]', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/offset-too-large'));
+        });
+
+        test('is case-insensitive for OFFSET', () => {
+            const r = runRules('[SELECT Id FROM Account offset 3000]', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/offset-too-large'));
+        });
+
+        test('message includes the offset value and the 2000 limit', () => {
+            const r = runRules('[SELECT Id FROM Account OFFSET 5000]', cats);
+            const f = r.find(x => x.ruleId === 'correctness/offset-too-large');
+            assert.ok(f.message.includes('5000'));
+            assert.ok(f.message.includes('2000'));
+        });
+
+        test('respects the correctness category toggle', () => {
+            const r = runRules('[SELECT Id FROM Account OFFSET 5000]', { correctness: false });
+            assert.ok(!r.some(f => f.ruleId === 'correctness/offset-too-large'));
+        });
+    });
+
     // -------------------------------------------------------------------------
     // Direct helper function tests
     // -------------------------------------------------------------------------
