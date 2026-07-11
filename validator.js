@@ -270,6 +270,31 @@ const RULES = [
             return findings;
         }
     },
+    {
+        id: 'correctness/sosl-min-length',
+        category: 'correctness',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOSL_PATTERN))) {
+                const q = m[0];
+                const termMatch = /FIND\s+(?:'([^']*)'|"([^"]*)")/i.exec(q);
+                if (!termMatch) continue; // bind term (FIND :x) — not a literal
+                const term = termMatch[1] !== undefined ? termMatch[1] : termMatch[2];
+                // Wildcards do not count toward the 2-character minimum.
+                if (term.replace(/[*?]/g, '').length >= 2) continue;
+                findings.push({
+                    ruleId: 'correctness/sosl-min-length',
+                    category: 'correctness',
+                    message: `SOSL search term '${term}' is shorter than the 2-character minimum — this throws a runtime error.`,
+                    start: m.index,
+                    end: m.index + q.length,
+                    type: 'SOSL',
+                    objects: extractSoslObjects(q)
+                });
+            }
+            return findings;
+        }
+    },
 
     // --- Performance ---------------------------------------------------------
     {

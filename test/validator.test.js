@@ -282,7 +282,8 @@ suite('validator', () => {
         });
 
         test('returns SOSL finding when dao category is enabled', () => {
-            const results = runRules("[FIND 'x' IN ALL FIELDS RETURNING Contact(Id)]", { dao: true });
+            const results = runRules("[FIND 'x' IN ALL FIELDS RETURNING Contact(Id)]",
+                { dao: true, correctness: false, performance: false, security: false, style: false, governor: false });
             assert.strictEqual(results.length, 1);
             assert.strictEqual(results[0].ruleId, 'dao/sosl-placement');
             assert.strictEqual(results[0].type, 'SOSL');
@@ -302,7 +303,7 @@ suite('validator', () => {
 
         test('enabling only dao category replicates findQueries behaviour', () => {
             const text = "List<Account> a = [SELECT Id FROM Account LIMIT 1]; [FIND 'x' IN ALL FIELDS]";
-            const fromRunRules = runRules(text, { dao: true, performance: false, security: false, style: false, governor: false });
+            const fromRunRules = runRules(text, { dao: true, correctness: false, performance: false, security: false, style: false, governor: false });
             const fromFindQueries = findQueries(text);
             assert.strictEqual(fromRunRules.length, fromFindQueries.length);
             for (let i = 0; i < fromRunRules.length; i++) {
@@ -966,6 +967,52 @@ suite('validator', () => {
         test('respects the correctness category toggle', () => {
             const r = runRules('[SELECT Id FROM Account OFFSET 5000]', { correctness: false });
             assert.ok(!r.some(f => f.ruleId === 'correctness/offset-too-large'));
+        });
+    });
+
+    suite('correctness/sosl-min-length', () => {
+        const cats = { correctness: true, dao: false, performance: false, security: false, style: false, governor: false };
+
+        test('flags a single-character search term', () => {
+            const r = runRules("[FIND 'a' IN ALL FIELDS RETURNING Account(Id)]", cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/sosl-min-length'));
+        });
+
+        test('does not flag a two-character search term', () => {
+            const r = runRules("[FIND 'ab' IN ALL FIELDS RETURNING Account(Id)]", cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/sosl-min-length'));
+        });
+
+        test('does not count a wildcard toward the minimum', () => {
+            const r = runRules("[FIND 'a*' IN ALL FIELDS RETURNING Account(Id)]", cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/sosl-min-length'));
+        });
+
+        test('does not flag a wildcarded term with two literal characters', () => {
+            const r = runRules("[FIND 'ab*' IN ALL FIELDS RETURNING Account(Id)]", cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/sosl-min-length'));
+        });
+
+        test('flags an empty search term', () => {
+            const r = runRules('[FIND "" IN ALL FIELDS]', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/sosl-min-length'));
+        });
+
+        test('works with double-quoted terms', () => {
+            const r = runRules('[FIND "a" IN ALL FIELDS]', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/sosl-min-length'));
+        });
+
+        test('message includes the term and the 2-character minimum', () => {
+            const r = runRules("[FIND 'a' IN ALL FIELDS]", cats);
+            const f = r.find(x => x.ruleId === 'correctness/sosl-min-length');
+            assert.ok(f.message.includes("'a'"));
+            assert.ok(f.message.includes('2-character'));
+        });
+
+        test('respects the correctness category toggle', () => {
+            const r = runRules("[FIND 'a' IN ALL FIELDS]", { correctness: false });
+            assert.ok(!r.some(f => f.ruleId === 'correctness/sosl-min-length'));
         });
     });
 
