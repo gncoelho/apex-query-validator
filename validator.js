@@ -237,6 +237,44 @@ function hasUnquotedPlus(argText) {
     return false;
 }
 
+/** Splits an argument into its top-level `+`-concatenated segments (ignoring +'s inside strings/parens). */
+function splitTopLevelConcat(argText) {
+    const segments = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < argText.length; i++) {
+        const ch = argText[i];
+        if (ch === '\'' || ch === '"') { i = skipStringLiteral(argText, i); continue; }
+        if (ch === '(') { depth++; continue; }
+        if (ch === ')') { depth--; continue; }
+        if (ch === '+' && depth === 0) {
+            segments.push(argText.slice(start, i));
+            start = i + 1;
+        }
+    }
+    segments.push(argText.slice(start));
+    return segments.map(s => s.trim());
+}
+
+/** A concatenated segment is safe when it is a string literal or a String.escapeSingleQuotes(...) call. */
+function isConcatSegmentSafe(segment) {
+    if (segment === '') return true;
+    if (/^'(?:\\.|[^'\\])*'$/.test(segment) || /^"(?:\\.|[^"\\])*"$/.test(segment)) return true;
+    if (/^String\s*\.\s*escapeSingleQuotes\s*\(/i.test(segment) && segment.endsWith(')')) return true;
+    return false;
+}
+
+/**
+ * True when the argument concatenates at least one unsafe (unescaped, non-literal)
+ * segment — i.e. a genuine injection risk. Fully-escaped or literal-only
+ * concatenations return false.
+ */
+function hasUnsafeConcat(argText) {
+    const segments = splitTopLevelConcat(argText);
+    if (segments.length < 2) return false; // no concatenation
+    return segments.some(s => !isConcatSegmentSafe(s));
+}
+
 // ---------------------------------------------------------------------------
 // Rule infrastructure
 // ---------------------------------------------------------------------------
@@ -529,12 +567,12 @@ const RULES = [
         check(text) {
             const findings = [];
             for (const call of findDynamicQueryCalls(text)) {
-                if (call.kind !== 'soql') continue;
-                if (call.argEnd === -1 || !hasUnquotedPlus(call.argText)) continue;
+                if (call.kind !== 'soql' || call.isBinds) continue;
+                if (call.argEnd === -1 || !hasUnsafeConcat(call.argText)) continue;
                 findings.push({
                     ruleId: 'security/dynamic-soql-concat',
                     category: 'security',
-                    message: `${call.method}() argument uses string concatenation — this is a SOQL injection risk. Use bind variables instead.`,
+                    message: `${call.method}() argument uses unescaped string concatenation — this is a SOQL injection risk. Use bind variables or String.escapeSingleQuotes().`,
                     start: call.callStart,
                     end: call.argEnd + 1,
                     type: 'dynamic-soql',
@@ -550,12 +588,12 @@ const RULES = [
         check(text) {
             const findings = [];
             for (const call of findDynamicQueryCalls(text)) {
-                if (call.kind !== 'sosl') continue;
-                if (call.argEnd === -1 || !hasUnquotedPlus(call.argText)) continue;
+                if (call.kind !== 'sosl' || call.isBinds) continue;
+                if (call.argEnd === -1 || !hasUnsafeConcat(call.argText)) continue;
                 findings.push({
                     ruleId: 'security/dynamic-sosl-concat',
                     category: 'security',
-                    message: `${call.method}() argument uses string concatenation — this is a SOSL injection risk. Wrap user input in String.escapeSingleQuotes().`,
+                    message: `${call.method}() argument uses unescaped string concatenation — this is a SOSL injection risk. Wrap user input in String.escapeSingleQuotes().`,
                     start: call.callStart,
                     end: call.argEnd + 1,
                     type: 'dynamic-sosl',
@@ -980,6 +1018,9 @@ module.exports = {
     getAssignmentContext,
     findDynamicQueryCalls,
     hasUnquotedPlus,
+    splitTopLevelConcat,
+    isConcatSegmentSafe,
+    hasUnsafeConcat,
     extractSoqlObjects,
     extractSoslObjects,
     findQueries,

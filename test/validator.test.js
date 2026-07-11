@@ -14,6 +14,7 @@ const {
     getAssignmentContext,
     findDynamicQueryCalls,
     hasUnquotedPlus,
+    hasUnsafeConcat,
     isExemptFile,
     isDaoFile,
     extractSoqlObjects,
@@ -577,6 +578,57 @@ suite('validator', () => {
         test('returns no findings when security category is disabled', () => {
             const r = runRules("Search.query('FIND ' + term + ' IN ALL FIELDS')", { security: false });
             assert.ok(!r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+    });
+
+    suite('concat rules — escape and bind awareness', () => {
+        const cats = { security: true, dao: false, correctness: false, performance: false, style: false, governor: false };
+
+        test('does not flag SOQL concat fully wrapped in escapeSingleQuotes', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + String.escapeSingleQuotes(objType))", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('flags SOQL concat that is only partially escaped', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + String.escapeSingleQuotes(a) + b)", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('does not flag a queryWithBinds call even with concatenation', () => {
+            const r = runRules("Database.queryWithBinds('SELECT Id FROM ' + obj, binds, AccessLevel.USER_MODE)", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-soql-concat'));
+        });
+
+        test('does not flag SOSL concat fully wrapped in escapeSingleQuotes', () => {
+            const r = runRules("Search.query('FIND ' + String.escapeSingleQuotes(term) + ' IN ALL FIELDS')", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+
+        test('still flags SOSL concat with a bare variable', () => {
+            const r = runRules("Search.query('FIND ' + term + ' IN ALL FIELDS')", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+    });
+
+    suite('hasUnsafeConcat', () => {
+        test('returns false with no concatenation', () => {
+            assert.strictEqual(hasUnsafeConcat("'SELECT Id FROM Account'"), false);
+        });
+
+        test('returns true for a bare concatenated variable', () => {
+            assert.strictEqual(hasUnsafeConcat("'SELECT Id FROM ' + obj"), true);
+        });
+
+        test('returns false when every non-literal segment is escaped', () => {
+            assert.strictEqual(hasUnsafeConcat("'a' + String.escapeSingleQuotes(x) + 'b'"), false);
+        });
+
+        test('returns true when one of several segments is unescaped', () => {
+            assert.strictEqual(hasUnsafeConcat("'a' + String.escapeSingleQuotes(x) + y"), true);
+        });
+
+        test('ignores a + inside a nested call', () => {
+            assert.strictEqual(hasUnsafeConcat("String.escapeSingleQuotes(a + b)"), false);
         });
     });
 
