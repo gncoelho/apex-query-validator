@@ -151,16 +151,48 @@ suite('Extension Test Suite', () => {
     });
 
     suite('QUICK_FIXES', () => {
+        const uri = vscode.Uri.file('/fake/Foo.cls');
+        function runFix(ruleId, queryText) {
+            const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, queryText.length));
+            const doc = { uri, getText: () => queryText };
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
+            const actions = QUICK_FIXES[ruleId](doc, diag);
+            return actions.length ? actions[0].edit.get(uri)[0].newText : null;
+        }
+
         test('style/sosl-sidebar-scope replaces SIDEBAR with ALL', () => {
-            const uri = vscode.Uri.file('/fake/Foo.cls');
-            const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 28));
-            const doc = { uri, getText: () => '[FIND "x" IN SIDEBAR FIELDS]' };
-            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Information);
-            const actions = QUICK_FIXES['style/sosl-sidebar-scope'](doc, diag);
-            assert.strictEqual(actions.length, 1);
-            assert.ok(actions[0].title.includes('ALL'));
-            const edits = actions[0].edit.get(uri);
-            assert.strictEqual(edits[0].newText, '[FIND "x" IN ALL FIELDS]');
+            assert.strictEqual(runFix('style/sosl-sidebar-scope', '[FIND "x" IN SIDEBAR FIELDS]'), '[FIND "x" IN ALL FIELDS]');
+        });
+
+        test('perf/missing-limit inserts LIMIT before the closing bracket', () => {
+            assert.strictEqual(runFix('perf/missing-limit', '[SELECT Id FROM Account]'), '[SELECT Id FROM Account LIMIT 200]');
+        });
+
+        test('perf/missing-limit inserts LIMIT before an existing OFFSET', () => {
+            assert.strictEqual(runFix('perf/missing-limit', '[SELECT Id FROM Account OFFSET 10]'), '[SELECT Id FROM Account LIMIT 200 OFFSET 10]');
+        });
+
+        test('perf/order-by-no-limit inserts LIMIT after ORDER BY', () => {
+            assert.strictEqual(runFix('perf/order-by-no-limit', '[SELECT Id FROM Account ORDER BY Name]'), '[SELECT Id FROM Account ORDER BY Name LIMIT 200]');
+        });
+
+        test('correctness/single-row-no-limit inserts LIMIT 1', () => {
+            assert.strictEqual(runFix('correctness/single-row-no-limit', '[SELECT Id FROM Account]'), '[SELECT Id FROM Account LIMIT 1]');
+        });
+
+        test('correctness/single-row-no-limit replaces an existing LIMIT with 1', () => {
+            assert.strictEqual(runFix('correctness/single-row-no-limit', '[SELECT Id FROM Account LIMIT 5]'), '[SELECT Id FROM Account LIMIT 1]');
+        });
+
+        test('security/missing-security-enforced inserts before LIMIT', () => {
+            assert.strictEqual(
+                runFix('security/missing-security-enforced', "[SELECT Id FROM Account WHERE Name = 'x' LIMIT 10]"),
+                "[SELECT Id FROM Account WHERE Name = 'x' WITH SECURITY_ENFORCED LIMIT 10]"
+            );
+        });
+
+        test('security/missing-security-enforced inserts before the closing bracket', () => {
+            assert.strictEqual(runFix('security/missing-security-enforced', '[SELECT Id FROM Account]'), '[SELECT Id FROM Account WITH SECURITY_ENFORCED]');
         });
     });
 

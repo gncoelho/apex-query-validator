@@ -35,6 +35,7 @@ function getConfig() {
         maxQueriesPerFile: config.get('maxQueriesPerFile'),
         maxSubqueries: config.get('maxSubqueries'),
         enforceSecurityClause: config.get('enforceSecurityClause'),
+        quickFixLimit: config.get('quickFixLimit'),
         ruleOverrides: config.get('rules') || {}
     };
 }
@@ -251,6 +252,39 @@ function makeReplaceAction(title, document, range, newText, diagnostic) {
     return action;
 }
 
+// Inserts a trailing clause (e.g. `LIMIT 200`) into a bracket query, before an
+// existing OFFSET when present, otherwise just before the closing `]`.
+function insertTailClause(queryText, clause) {
+    const offsetIdx = queryText.search(/\s+OFFSET\b/i);
+    if (offsetIdx !== -1) {
+        return queryText.slice(0, offsetIdx) + ' ' + clause + queryText.slice(offsetIdx);
+    }
+    const closeIdx = queryText.lastIndexOf(']');
+    if (closeIdx === -1) return null;
+    return queryText.slice(0, closeIdx).replace(/\s+$/, '') + ' ' + clause + queryText.slice(closeIdx);
+}
+
+// Inserts `WITH SECURITY_ENFORCED` after any WHERE conditions but before
+// GROUP BY / ORDER BY / LIMIT / OFFSET (or the closing `]`).
+function insertSecurityClause(queryText) {
+    const m = /\s+(GROUP\s+BY|ORDER\s+BY|LIMIT|OFFSET)\b/i.exec(queryText);
+    if (m) {
+        return queryText.slice(0, m.index) + ' WITH SECURITY_ENFORCED' + queryText.slice(m.index);
+    }
+    const closeIdx = queryText.lastIndexOf(']');
+    if (closeIdx === -1) return null;
+    return queryText.slice(0, closeIdx).replace(/\s+$/, '') + ' WITH SECURITY_ENFORCED' + queryText.slice(closeIdx);
+}
+
+function addLimitFix(document, diagnostic) {
+    const text = document.getText(diagnostic.range);
+    if (/\bLIMIT\b/i.test(text)) return [];
+    const limit = getConfig().quickFixLimit || 200;
+    const replaced = insertTailClause(text, `LIMIT ${limit}`);
+    if (!replaced || replaced === text) return [];
+    return [makeReplaceAction(`Add LIMIT ${limit}`, document, diagnostic.range, replaced, diagnostic)];
+}
+
 // Registry of per-rule Quick Fixes, keyed by rule id. Each factory returns
 // CodeAction[] for a single diagnostic. Exported for testing.
 const QUICK_FIXES = {
@@ -259,6 +293,22 @@ const QUICK_FIXES = {
         const replaced = text.replace(/\bSIDEBAR\b/i, 'ALL');
         if (replaced === text) return [];
         return [makeReplaceAction('Replace SIDEBAR with ALL FIELDS', document, diagnostic.range, replaced, diagnostic)];
+    },
+    'perf/missing-limit': addLimitFix,
+    'perf/order-by-no-limit': addLimitFix,
+    'correctness/single-row-no-limit': (document, diagnostic) => {
+        const text = document.getText(diagnostic.range);
+        const replaced = /\bLIMIT\s+\d+/i.test(text)
+            ? text.replace(/\bLIMIT\s+\d+/i, 'LIMIT 1')
+            : insertTailClause(text, 'LIMIT 1');
+        if (!replaced || replaced === text) return [];
+        return [makeReplaceAction('Add LIMIT 1', document, diagnostic.range, replaced, diagnostic)];
+    },
+    'security/missing-security-enforced': (document, diagnostic) => {
+        const text = document.getText(diagnostic.range);
+        const replaced = insertSecurityClause(text);
+        if (!replaced || replaced === text) return [];
+        return [makeReplaceAction('Add WITH SECURITY_ENFORCED', document, diagnostic.range, replaced, diagnostic)];
     }
 };
 
