@@ -22,6 +22,7 @@ const {
     extractSoslObjects,
     buildDaoMethod,
     buildMetadataIndex,
+    checkUnknownObject,
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
@@ -1602,6 +1603,50 @@ suite('validator', () => {
         test('registers an object even when only field files are present', () => {
             assert.ok(buildMetadataIndex([], fieldPaths, baseline).objects.has('broker__c'));
         });
+    });
+
+    suite('metadata/unknown-object', () => {
+        const cats = { metadata: true, dao: false, correctness: false, performance: false, security: false, style: false, governor: false };
+        const index = { objects: new Set(['account', 'broker__c']), fieldsByObject: new Map() };
+
+        test('flags an unknown custom object', () => {
+            const r = runRules('[SELECT Id FROM Missing__c]', cats, { metadataIndex: index });
+            assert.ok(r.some(f => f.ruleId === 'metadata/unknown-object'));
+        });
+
+        test('does not flag a known custom object', () => {
+            const r = runRules('[SELECT Id FROM Broker__c]', cats, { metadataIndex: index });
+            assert.ok(!r.some(f => f.ruleId === 'metadata/unknown-object'));
+        });
+
+        test('does not flag a standard object', () => {
+            const r = runRules('[SELECT Id FROM Account]', cats, { metadataIndex: index });
+            assert.ok(!r.some(f => f.ruleId === 'metadata/unknown-object'));
+        });
+
+        test('does not flag a namespaced (managed-package) custom object', () => {
+            const r = runRules('[SELECT Id FROM ns__Thing__c]', cats, { metadataIndex: index });
+            assert.ok(!r.some(f => f.ruleId === 'metadata/unknown-object'));
+        });
+
+        test('is a no-op without a metadata index', () => {
+            const r = runRules('[SELECT Id FROM Missing__c]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'metadata/unknown-object'));
+        });
+
+        test('respects the metadata category toggle', () => {
+            const r = runRules('[SELECT Id FROM Missing__c]', { metadata: false }, { metadataIndex: index });
+            assert.ok(!r.some(f => f.ruleId === 'metadata/unknown-object'));
+        });
+    });
+
+    suite('checkUnknownObject', () => {
+        const index = { objects: new Set(['broker__c']) };
+        test('true for an unknown custom object', () => assert.strictEqual(checkUnknownObject('Missing__c', index), true));
+        test('false for a known custom object', () => assert.strictEqual(checkUnknownObject('Broker__c', index), false));
+        test('false for a standard object', () => assert.strictEqual(checkUnknownObject('Account', index), false));
+        test('false for a namespaced custom object', () => assert.strictEqual(checkUnknownObject('ns__Thing__c', index), false));
+        test('false when object name is empty', () => assert.strictEqual(checkUnknownObject('', index), false));
     });
 
     suite('isCollectionType', () => {

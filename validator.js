@@ -85,6 +85,21 @@ function buildMetadataIndex(objectFsPaths = [], fieldFsPaths = [], baseline = {}
     return { objects, fieldsByObject };
 }
 
+/**
+ * Returns true only when an SObject name can be positively disproven: it is a
+ * simple custom (`__c`) object absent from the index. Standard objects and
+ * namespaced (managed-package) objects can't be disproven from local source, so
+ * they are never flagged.
+ */
+function checkUnknownObject(objectName, index) {
+    if (!objectName) return false;
+    const lower = objectName.toLowerCase();
+    if (!lower.endsWith('__c')) return false;
+    if (lower.slice(0, -3).includes('__')) return false; // namespaced -> managed package
+    if (index && index.objects && index.objects.has(lower)) return false;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Performance rule helpers
 // ---------------------------------------------------------------------------
@@ -1013,6 +1028,32 @@ const RULES = [
             }
             return findings;
         }
+    },
+
+    // --- Metadata (offline; requires options.metadataIndex) ------------------
+    {
+        id: 'metadata/unknown-object',
+        category: 'metadata',
+        check(text, options = {}) {
+            const index = options.metadataIndex;
+            if (!index) return [];
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const objs = extractSoqlObjects(q);
+                if (!checkUnknownObject(objs[0], index)) continue;
+                findings.push({
+                    ruleId: 'metadata/unknown-object',
+                    category: 'metadata',
+                    message: `SObject '${objs[0]}' was not found in the local SFDX metadata — check for a typo or a missing object.`,
+                    start: m.index,
+                    end: m.index + q.length,
+                    type: 'SOQL',
+                    objects: objs
+                });
+            }
+            return findings;
+        }
     }
 ];
 
@@ -1223,6 +1264,7 @@ module.exports = {
     extractSoslObjects,
     buildDaoMethod,
     buildMetadataIndex,
+    checkUnknownObject,
     findQueries,
     isExemptFile,
     isDaoFile,

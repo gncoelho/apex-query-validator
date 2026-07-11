@@ -110,6 +110,11 @@
           "default": true,
           "description": "Enable governor-limit rules (too many queries in one file, Database.query() calls, Database.search() / Search.query() calls)."
         },
+        "apexQueryValidator.enableMetadataRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable offline metadata rules that validate SObject and field names in SOQL against your project's local SFDX metadata (object/field-meta.xml). Only flags custom (__c) names it can positively disprove."
+        },
         "apexQueryValidator.enforceSecurityClause": {
           "type": "boolean",
           "default": false,

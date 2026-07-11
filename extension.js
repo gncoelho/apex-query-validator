@@ -54,6 +54,7 @@ function getConfig() {
         enableSecurityRules: config.get('enableSecurityRules'),
         enableStyleRules: config.get('enableStyleRules'),
         enableGovernorRules: config.get('enableGovernorRules'),
+        enableMetadataRules: config.get('enableMetadataRules'),
         maxSelectFields: config.get('maxSelectFields'),
         largeObjects: config.get('largeObjects'),
         maxQueriesPerFile: config.get('maxQueriesPerFile'),
@@ -102,11 +103,13 @@ function applyDocumentValidation(document, diagnosticCollection, {
     enableSecurityRules,
     enableStyleRules,
     enableGovernorRules,
+    enableMetadataRules,
     maxSelectFields,
     largeObjects,
     maxQueriesPerFile,
     maxSubqueries,
     enforceSecurityClause,
+    metadataIndex,
     ruleOverrides = {}
 }) {
     const text = document.getText();
@@ -116,8 +119,9 @@ function applyDocumentValidation(document, diagnosticCollection, {
         performance: enablePerformanceRules,
         security: enableSecurityRules,
         style: enableStyleRules,
-        governor: enableGovernorRules
-    }, { maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides });
+        governor: enableGovernorRules,
+        metadata: enableMetadataRules
+    }, { maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides });
 
     const diagnostics = findings.map(({ ruleId, message, start, end, category, severity: findingSeverity }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
@@ -153,9 +157,9 @@ function applyDocumentValidation(document, diagnosticCollection, {
     };
 }
 
-function runValidation(document, diagnosticCollection, { silent }) {
+async function runValidation(document, diagnosticCollection, { silent }) {
     const { exemptKeywords, includeGlobs, severity, autoValidate,
-        enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+        enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
         maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides } = getConfig();
 
     if (!matchesGlob(document.fileName, includeGlobs)) {
@@ -175,9 +179,11 @@ function runValidation(document, diagnosticCollection, { silent }) {
         return;
     }
 
+    const metadataIndex = enableMetadataRules ? await getMetadataIndex() : null;
+
     const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
-        severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
-        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides
+        severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
+        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides
     });
 
     if (!silent) {
@@ -193,8 +199,10 @@ function shouldClearOnClose(uriString, workspaceValidatedUris) {
 
 async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
     const { exemptKeywords, includeGlobs, severity,
-        enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+        enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
         maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides } = getConfig();
+
+    const metadataIndex = enableMetadataRules ? await getMetadataIndex() : null;
 
     // Reset tracked URIs so a re-run starts clean.
     workspaceValidatedUris.clear();
@@ -219,8 +227,8 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
                 if (!matchesGlob(document.fileName, includeGlobs)) continue;
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
                 const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
-                    severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
-                    maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides
+                    severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
+                    maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides
                 });
                 // Track this URI so onDidCloseTextDocument does not wipe its diagnostics.
                 workspaceValidatedUris.add(uri.toString());
