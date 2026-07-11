@@ -675,13 +675,20 @@ function isFindingSuppressed(finding, suppressions, lineStarts) {
  *
  * @param {string} text - full document text
  * @param {{ dao?: boolean, performance?: boolean, security?: boolean, style?: boolean, governor?: boolean }} enabledCategories
- * @param {object} [options] - rule options (e.g. maxSelectFields, largeObjects)
+ * @param {object} [options] - rule options (e.g. maxSelectFields, largeObjects, ruleOverrides)
  * @returns {Finding[]}
+ *
+ * `options.ruleOverrides` maps a rule id to "off" | "information" | "warning" |
+ * "error" and takes precedence over the category toggle: "off" disables the
+ * rule; any severity value forces it to run even when its category is disabled.
  */
 function runRules(text, enabledCategories = {}, options = {}) {
+    const overrides = options.ruleOverrides || {};
     const findings = [];
     for (const rule of RULES) {
-        if (enabledCategories[rule.category] === false) continue;
+        const override = overrides[rule.id];
+        if (override === 'off') continue;
+        if (override == null && enabledCategories[rule.category] === false) continue;
         findings.push(...rule.check(text, options));
     }
 

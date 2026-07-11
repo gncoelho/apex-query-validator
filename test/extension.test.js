@@ -1,7 +1,7 @@
 const assert = require('assert');
 const vscode = require('vscode');
 const { buildWorkspaceSummaryMessage } = require('../validator');
-const { shouldClearOnClose, findDaoFilesForObjects } = require('../extension');
+const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity } = require('../extension');
 
 suite('Extension Test Suite', () => {
     suiteSetup(async () => {
@@ -136,6 +136,62 @@ suite('Extension Test Suite', () => {
 
     test('shouldClearOnClose returns true when the tracked set is empty', () => {
         assert.strictEqual(shouldClearOnClose('file:///a.cls', new Set()), true);
+    });
+
+    // --- resolveSeverity tests ---
+
+    suite('resolveSeverity', () => {
+        const W = vscode.DiagnosticSeverity.Warning;
+
+        test('a per-rule override wins over everything', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'perf/missing-limit', category: 'performance' },
+                    { ruleOverrides: { 'perf/missing-limit': 'error' }, defaultSeverity: W }
+                ),
+                vscode.DiagnosticSeverity.Error
+            );
+        });
+
+        test('style category defaults to Information', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'style/select-id-only', category: 'style' },
+                    { ruleOverrides: {}, defaultSeverity: W }
+                ),
+                vscode.DiagnosticSeverity.Information
+            );
+        });
+
+        test('an override can raise a style rule above Information', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'style/select-id-only', category: 'style' },
+                    { ruleOverrides: { 'style/select-id-only': 'warning' }, defaultSeverity: W }
+                ),
+                vscode.DiagnosticSeverity.Warning
+            );
+        });
+
+        test('an information finding severity maps to Information', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'security/user-input-in-where', category: 'security', severity: 'information' },
+                    { ruleOverrides: {}, defaultSeverity: W }
+                ),
+                vscode.DiagnosticSeverity.Information
+            );
+        });
+
+        test('falls back to the global default severity', () => {
+            assert.strictEqual(
+                resolveSeverity(
+                    { ruleId: 'perf/missing-limit', category: 'performance' },
+                    { ruleOverrides: {}, defaultSeverity: W }
+                ),
+                W
+            );
+        });
     });
 
     // --- findDaoFilesForObjects tests ---

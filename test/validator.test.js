@@ -1215,4 +1215,33 @@ suite('validator', () => {
             assert.ok(!r.some(f => f.ruleId === 'perf/missing-limit'));
         });
     });
+
+    suite('runRules — per-rule overrides', () => {
+        test('a rule set to "off" is skipped even when its category is enabled', () => {
+            const r = runRules('[SELECT Id FROM Account]',
+                { performance: true, dao: false, security: false, style: false, governor: false },
+                { ruleOverrides: { 'perf/missing-limit': 'off' } });
+            assert.ok(!r.some(f => f.ruleId === 'perf/missing-limit'));
+        });
+
+        test('a rule with a severity override runs even when its category is disabled', () => {
+            const r = runRules('[SELECT Id FROM Account]',
+                { performance: false, dao: false, security: false, style: false, governor: false },
+                { ruleOverrides: { 'perf/missing-limit': 'warning' } });
+            assert.ok(r.some(f => f.ruleId === 'perf/missing-limit'));
+        });
+
+        test('an unrelated override does not affect other rules', () => {
+            const r = runRules('[SELECT Id FROM Account]',
+                { performance: true, dao: false, security: false, style: false, governor: false },
+                { ruleOverrides: { 'style/select-id-only': 'off' } });
+            assert.ok(r.some(f => f.ruleId === 'perf/missing-limit'));
+        });
+
+        test('absent ruleOverrides preserves category-based behaviour', () => {
+            const r = runRules('[SELECT Id FROM Account]',
+                { performance: true, dao: false, security: false, style: false, governor: false });
+            assert.ok(r.some(f => f.ruleId === 'perf/missing-limit'));
+        });
+    });
 });

@@ -99,6 +99,15 @@
           "type": "boolean",
           "default": true,
           "description": "Enable governor-limit rules (too many queries in one file, Database.query() calls, Database.search() / Search.query() calls)."
+        },
+        "apexQueryValidator.rules": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["off", "information", "warning", "error"]
+          },
+          "description": "Per-rule overrides keyed by rule id (e.g. \"perf/missing-limit\"). Each value is \"off\", \"information\", \"warning\", or \"error\" and takes precedence over the category toggle and the global diagnosticSeverity. A severity value also forces the rule to run even when its category is disabled."
         }
       }
     }
