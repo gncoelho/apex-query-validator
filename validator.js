@@ -48,6 +48,16 @@ function extractFieldList(queryText) {
 }
 
 /**
+ * Returns the FIELDS() macro form used in a query — 'ALL', 'STANDARD', or
+ * 'CUSTOM' — or null when none is present. ALL and CUSTOM are "unbounded" and
+ * require a bounded LIMIT; STANDARD is bounded.
+ */
+function fieldsMacroType(queryText) {
+    const m = /\bFIELDS\s*\(\s*(ALL|STANDARD|CUSTOM)\s*\)/i.exec(queryText);
+    return m ? m[1].toUpperCase() : null;
+}
+
+/**
  * Advances index i past a string literal starting at text[i] (either ' or ").
  * Returns the index of the closing quote, or text.length - 1 if unclosed.
  */
@@ -290,6 +300,32 @@ const RULES = [
                     end: m.index + q.length,
                     type: 'SOSL',
                     objects: extractSoslObjects(q)
+                });
+            }
+            return findings;
+        }
+    },
+    {
+        id: 'correctness/fields-macro-needs-limit',
+        category: 'correctness',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const macro = fieldsMacroType(q);
+                // Only the unbounded forms require a bounded LIMIT.
+                if (macro !== 'ALL' && macro !== 'CUSTOM') continue;
+                const limitMatch = /\bLIMIT\s+(\d+)/i.exec(q);
+                if (limitMatch && parseInt(limitMatch[1], 10) <= 200) continue;
+                const reason = limitMatch ? `a LIMIT of ${limitMatch[1]}` : 'no LIMIT';
+                findings.push({
+                    ruleId: 'correctness/fields-macro-needs-limit',
+                    category: 'correctness',
+                    message: `FIELDS(${macro}) requires a LIMIT of 200 or fewer, but this query has ${reason} — it will fail to run.`,
+                    start: m.index,
+                    end: m.index + q.length,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(q)
                 });
             }
             return findings;
@@ -884,6 +920,7 @@ module.exports = {
     // Exported helpers (used in tests and for extension consumers)
     hasAggregate,
     extractFieldList,
+    fieldsMacroType,
     skipStringLiteral,
     isInsideLoop,
     buildLineStarts,

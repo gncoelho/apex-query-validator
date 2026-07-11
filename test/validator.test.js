@@ -4,6 +4,7 @@ const {
     runRules,
     hasAggregate,
     extractFieldList,
+    fieldsMacroType,
     skipStringLiteral,
     isInsideLoop,
     buildLineStarts,
@@ -1014,6 +1015,59 @@ suite('validator', () => {
             const r = runRules("[FIND 'a' IN ALL FIELDS]", { correctness: false });
             assert.ok(!r.some(f => f.ruleId === 'correctness/sosl-min-length'));
         });
+    });
+
+    suite('correctness/fields-macro-needs-limit', () => {
+        const cats = { correctness: true, dao: false, performance: false, security: false, style: false, governor: false };
+
+        test('flags FIELDS(ALL) with no LIMIT', () => {
+            const r = runRules('[SELECT FIELDS(ALL) FROM Account]', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/fields-macro-needs-limit'));
+        });
+
+        test('flags FIELDS(ALL) with a LIMIT above 200', () => {
+            const r = runRules('[SELECT FIELDS(ALL) FROM Account LIMIT 201]', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/fields-macro-needs-limit'));
+        });
+
+        test('does not flag FIELDS(ALL) with a LIMIT of 200', () => {
+            const r = runRules('[SELECT FIELDS(ALL) FROM Account LIMIT 200]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/fields-macro-needs-limit'));
+        });
+
+        test('flags FIELDS(CUSTOM) with no LIMIT', () => {
+            const r = runRules('[SELECT FIELDS(CUSTOM) FROM Account]', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/fields-macro-needs-limit'));
+        });
+
+        test('does not flag bounded FIELDS(STANDARD) without a LIMIT', () => {
+            const r = runRules('[SELECT FIELDS(STANDARD) FROM Account]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/fields-macro-needs-limit'));
+        });
+
+        test('does not flag a query with no FIELDS() macro', () => {
+            const r = runRules('[SELECT Id, Name FROM Account]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/fields-macro-needs-limit'));
+        });
+
+        test('message names the macro and the 200 limit', () => {
+            const r = runRules('[SELECT FIELDS(ALL) FROM Account]', cats);
+            const f = r.find(x => x.ruleId === 'correctness/fields-macro-needs-limit');
+            assert.ok(f.message.includes('FIELDS(ALL)'));
+            assert.ok(f.message.includes('200'));
+        });
+
+        test('respects the correctness category toggle', () => {
+            const r = runRules('[SELECT FIELDS(ALL) FROM Account]', { correctness: false });
+            assert.ok(!r.some(f => f.ruleId === 'correctness/fields-macro-needs-limit'));
+        });
+    });
+
+    suite('fieldsMacroType', () => {
+        test('detects ALL', () => assert.strictEqual(fieldsMacroType('[SELECT FIELDS(ALL) FROM Account]'), 'ALL'));
+        test('detects STANDARD case-insensitively', () => assert.strictEqual(fieldsMacroType('[SELECT fields(standard) FROM Account]'), 'STANDARD'));
+        test('detects CUSTOM with inner whitespace', () => assert.strictEqual(fieldsMacroType('[SELECT FIELDS( CUSTOM ) FROM Account]'), 'CUSTOM'));
+        test('returns null when no macro present', () => assert.strictEqual(fieldsMacroType('[SELECT Id FROM Account]'), null));
     });
 
     // -------------------------------------------------------------------------
