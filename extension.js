@@ -2,7 +2,8 @@ const vscode = require('vscode');
 const path = require('path');
 const {
     runRules, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
-    matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage
+    matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage,
+    splitTopLevelConcat, isConcatSegmentSafe
 } = require('./validator');
 
 const decorationType = vscode.window.createTextEditorDecorationType({
@@ -285,6 +286,41 @@ function addLimitFix(document, diagnostic) {
     return [makeReplaceAction(`Add LIMIT ${limit}`, document, diagnostic.range, replaced, diagnostic)];
 }
 
+// Wraps every unsafe concatenated segment of a dynamic query argument in
+// String.escapeSingleQuotes(...). The diagnostic range spans the whole call.
+function escapeConcatFix(document, diagnostic) {
+    const text = document.getText(diagnostic.range);
+    const openIdx = text.indexOf('(');
+    const closeIdx = text.lastIndexOf(')');
+    if (openIdx === -1 || closeIdx <= openIdx) return [];
+    const arg = text.slice(openIdx + 1, closeIdx);
+    const segments = splitTopLevelConcat(arg);
+    if (segments.length < 2) return [];
+    const wrapped = segments.map(s => isConcatSegmentSafe(s) ? s : `String.escapeSingleQuotes(${s})`);
+    const newText = text.slice(0, openIdx + 1) + wrapped.join(' + ') + text.slice(closeIdx);
+    if (newText === text) return [];
+    return [makeReplaceAction('Wrap variables in String.escapeSingleQuotes()', document, diagnostic.range, newText, diagnostic)];
+}
+
+// Extracts a hardcoded Salesforce Id literal into a class constant and replaces
+// the literal with a reference to it. Requires an enclosing class (returns no
+// fix for triggers or class-less snippets).
+function extractHardcodedIdFix(document, diagnostic) {
+    const literal = document.getText(diagnostic.range);
+    const whole = document.getText();
+    const classMatch = /\bclass\b[^{]*\{/i.exec(whole);
+    if (!classMatch) return [];
+    const constName = 'RECORD_ID';
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(document.uri, diagnostic.range, constName);
+    const insertPos = document.positionAt(classMatch.index + classMatch[0].length);
+    edit.insert(document.uri, insertPos, `\n    private static final Id ${constName} = ${literal};`);
+    const action = new vscode.CodeAction('Extract hardcoded Id to a constant', vscode.CodeActionKind.QuickFix);
+    action.edit = edit;
+    action.diagnostics = [diagnostic];
+    return [action];
+}
+
 // Registry of per-rule Quick Fixes, keyed by rule id. Each factory returns
 // CodeAction[] for a single diagnostic. Exported for testing.
 const QUICK_FIXES = {
@@ -309,7 +345,10 @@ const QUICK_FIXES = {
         const replaced = insertSecurityClause(text);
         if (!replaced || replaced === text) return [];
         return [makeReplaceAction('Add WITH SECURITY_ENFORCED', document, diagnostic.range, replaced, diagnostic)];
-    }
+    },
+    'security/dynamic-soql-concat': escapeConcatFix,
+    'security/dynamic-sosl-concat': escapeConcatFix,
+    'security/hardcoded-id': extractHardcodedIdFix
 };
 
 class QueryQuickFixProvider {

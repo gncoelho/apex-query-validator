@@ -194,6 +194,52 @@ suite('Extension Test Suite', () => {
         test('security/missing-security-enforced inserts before the closing bracket', () => {
             assert.strictEqual(runFix('security/missing-security-enforced', '[SELECT Id FROM Account]'), '[SELECT Id FROM Account WITH SECURITY_ENFORCED]');
         });
+
+        test('security/dynamic-soql-concat wraps the variable in escapeSingleQuotes', () => {
+            assert.strictEqual(
+                runFix('security/dynamic-soql-concat', "Database.query('SELECT Id FROM ' + objectName)"),
+                "Database.query('SELECT Id FROM ' + String.escapeSingleQuotes(objectName))"
+            );
+        });
+
+        test('security/dynamic-sosl-concat wraps only the unsafe segment', () => {
+            assert.strictEqual(
+                runFix('security/dynamic-sosl-concat', "Search.query('FIND ' + term + ' IN ALL FIELDS')"),
+                "Search.query('FIND ' + String.escapeSingleQuotes(term) + ' IN ALL FIELDS')"
+            );
+        });
+
+        test('security/hardcoded-id extracts the id to a class constant', () => {
+            const whole = "public class Foo {\n    void m() { Account a = [SELECT Id FROM Account WHERE Id = '001000000000001' LIMIT 1]; }\n}";
+            const litText = "'001000000000001'";
+            const litStart = whole.indexOf(litText);
+            const doc = {
+                uri,
+                getText: (range) => (range ? litText : whole),
+                positionAt: (offset) => {
+                    const before = whole.slice(0, offset);
+                    const line = (before.match(/\n/g) || []).length;
+                    return new vscode.Position(line, offset - (before.lastIndexOf('\n') + 1));
+                }
+            };
+            const range = new vscode.Range(doc.positionAt(litStart), doc.positionAt(litStart + litText.length));
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
+            const actions = QUICK_FIXES['security/hardcoded-id'](doc, diag);
+            assert.strictEqual(actions.length, 1);
+            assert.ok(actions[0].title.toLowerCase().includes('constant'));
+            const edits = actions[0].edit.get(uri);
+            assert.strictEqual(edits.length, 2);
+            assert.ok(edits.some(e => e.newText === 'RECORD_ID'));
+            assert.ok(edits.some(e => /private static final Id RECORD_ID = '001000000000001';/.test(e.newText)));
+        });
+
+        test('security/hardcoded-id offers no fix without an enclosing class', () => {
+            const whole = "trigger Foo on Account (before insert) { }";
+            const doc = { uri, getText: (range) => (range ? "'001000000000001'" : whole), positionAt: () => new vscode.Position(0, 0) };
+            const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 17));
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Warning);
+            assert.strictEqual(QUICK_FIXES['security/hardcoded-id'](doc, diag).length, 0);
+        });
     });
 
     // --- resolveSeverity tests ---
