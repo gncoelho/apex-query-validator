@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const path = require('path');
 const {
     runRules, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
-    matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage,
+    matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage, buildWorkspaceCancelledMessage,
     splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod, buildMetadataIndex, countQueriesByType
 } = require('./validator');
 const { STANDARD_OBJECTS, COMMON_STANDARD_FIELDS } = require('./metadata-baseline');
@@ -215,11 +215,18 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
     }
 
     let totalSoql = 0, totalSosl = 0, fileCount = 0;
+    let cancelled = false;
 
     await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Validating workspace...', cancellable: false },
-        async () => {
-            for (const uri of uris) {
+        { location: vscode.ProgressLocation.Notification, title: 'Validating workspace...', cancellable: true },
+        async (progress, token) => {
+            for (let i = 0; i < uris.length; i++) {
+                // Stop before the next file when the user cancels. Diagnostics
+                // already set for scanned files are intentionally kept.
+                if (token && token.isCancellationRequested) { cancelled = true; break; }
+                progress.report({ increment: 100 / uris.length, message: `${i + 1} of ${uris.length} files` });
+
+                const uri = uris[i];
                 const document = await vscode.workspace.openTextDocument(uri);
                 if (!matchesGlob(document.fileName, includeGlobs)) continue;
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
@@ -236,7 +243,11 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
         }
     );
 
-    vscode.window.showInformationMessage(buildWorkspaceSummaryMessage(fileCount, totalSoql, totalSosl));
+    vscode.window.showInformationMessage(
+        cancelled
+            ? buildWorkspaceCancelledMessage(fileCount, totalSoql, totalSosl)
+            : buildWorkspaceSummaryMessage(fileCount, totalSoql, totalSosl)
+    );
 }
 
 // Finds DAO files in the workspace whose name contains one of the given SObject names.

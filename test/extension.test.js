@@ -1,6 +1,6 @@
 const assert = require('assert');
 const vscode = require('vscode');
-const { buildWorkspaceSummaryMessage } = require('../validator');
+const { buildWorkspaceSummaryMessage, buildWorkspaceCancelledMessage } = require('../validator');
 const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction, getMetadataIndex, invalidateMetadataIndex } = require('../extension');
 
 suite('Extension Test Suite', () => {
@@ -79,6 +79,75 @@ suite('Extension Test Suite', () => {
             await vscode.commands.executeCommand('apex-query-validator.validateWorkspace');
             const diagnostics = vscode.languages.getDiagnostics(fakeUri);
             assert.ok(diagnostics.length > 0, 'Expected diagnostics to be set for the discovered file');
+        } finally {
+            vscode.workspace.findFiles = origFindFiles;
+            vscode.workspace.openTextDocument = origOpenDoc;
+            vscode.window.withProgress = origWithProgress;
+            vscode.window.showInformationMessage = origShowInfo;
+        }
+    });
+
+    test('validateWorkspace reports cancellation and scans nothing when cancelled up front', async () => {
+        const fileA = vscode.Uri.file('/fake/CancelA.cls');
+        const fileB = vscode.Uri.file('/fake/CancelB.cls');
+        const docFor = (uri) => ({
+            getText: () => '[SELECT Id FROM Account]',
+            fileName: uri.fsPath, uri, positionAt: (o) => new vscode.Position(0, o)
+        });
+
+        const origFindFiles = vscode.workspace.findFiles;
+        const origOpenDoc = vscode.workspace.openTextDocument;
+        const origWithProgress = vscode.window.withProgress;
+        const origShowInfo = vscode.window.showInformationMessage;
+        let capturedMessage;
+        let openedCount = 0;
+
+        vscode.workspace.findFiles = async () => [fileA, fileB];
+        vscode.workspace.openTextDocument = async (uri) => { openedCount++; return docFor(uri); };
+        vscode.window.withProgress = async (_opts, task) => task({ report: () => {} }, { isCancellationRequested: true });
+        vscode.window.showInformationMessage = (msg) => { capturedMessage = msg; };
+
+        try {
+            await vscode.commands.executeCommand('apex-query-validator.validateWorkspace');
+            assert.strictEqual(openedCount, 0, 'no files should be opened when cancelled before the loop');
+            assert.strictEqual(capturedMessage, buildWorkspaceCancelledMessage(0, 0, 0));
+        } finally {
+            vscode.workspace.findFiles = origFindFiles;
+            vscode.workspace.openTextDocument = origOpenDoc;
+            vscode.window.withProgress = origWithProgress;
+            vscode.window.showInformationMessage = origShowInfo;
+        }
+    });
+
+    test('validateWorkspace keeps partial results when cancelled after one file', async () => {
+        const fileA = vscode.Uri.file('/fake/PartA.cls');
+        const fileB = vscode.Uri.file('/fake/PartB.cls');
+        const docFor = (uri) => ({
+            getText: () => '[SELECT Id FROM Account]',
+            fileName: uri.fsPath, uri, positionAt: (o) => new vscode.Position(0, o)
+        });
+
+        // Cancel is requested only from the second check onward, so file A is
+        // processed and file B is skipped.
+        let checks = 0;
+        const token = { get isCancellationRequested() { return checks++ >= 1; } };
+
+        const origFindFiles = vscode.workspace.findFiles;
+        const origOpenDoc = vscode.workspace.openTextDocument;
+        const origWithProgress = vscode.window.withProgress;
+        const origShowInfo = vscode.window.showInformationMessage;
+        let capturedMessage;
+
+        vscode.workspace.findFiles = async () => [fileA, fileB];
+        vscode.workspace.openTextDocument = async (uri) => docFor(uri);
+        vscode.window.withProgress = async (_opts, task) => task({ report: () => {} }, token);
+        vscode.window.showInformationMessage = (msg) => { capturedMessage = msg; };
+
+        try {
+            await vscode.commands.executeCommand('apex-query-validator.validateWorkspace');
+            assert.ok(vscode.languages.getDiagnostics(fileA).length > 0, 'file A partial results should be kept');
+            assert.strictEqual(vscode.languages.getDiagnostics(fileB).length, 0, 'file B should not be processed');
+            assert.ok(/cancel/i.test(capturedMessage), 'message should indicate cancellation');
         } finally {
             vscode.workspace.findFiles = origFindFiles;
             vscode.workspace.openTextDocument = origOpenDoc;

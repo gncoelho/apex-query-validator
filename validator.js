@@ -1309,6 +1309,19 @@ function buildWorkspaceSummaryMessage(fileCount, soqlCount, soslCount) {
     return `${filePart} ${soqlPart} ${soslPart}`;
 }
 
+// Summary shown when a whole-project validation is cancelled partway through.
+// Partial results for the files already scanned are kept in the Problems panel.
+function buildWorkspaceCancelledMessage(fileCount, soqlCount, soslCount) {
+    const filePart = `Validation cancelled after ${fileCount} ${fileCount === 1 ? 'file' : 'files'} scanned.`;
+    const soqlPart = soqlCount > 0
+        ? `${soqlCount} SOQL ${soqlCount === 1 ? 'query' : 'queries'} found so far.`
+        : 'No SOQL queries found so far.';
+    const soslPart = soslCount > 0
+        ? `${soslCount} SOSL ${soslCount === 1 ? 'query' : 'queries'} found so far.`
+        : 'No SOSL queries found so far.';
+    return `${filePart} ${soqlPart} ${soslPart}`;
+}
+
 module.exports = {
     SOQL_PATTERN,
     SOSL_PATTERN,
@@ -1345,5 +1358,6 @@ module.exports = {
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
-    buildWorkspaceSummaryMessage
+    buildWorkspaceSummaryMessage,
+    buildWorkspaceCancelledMessage
 };

@@ -29,7 +29,8 @@ const {
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
-    buildWorkspaceSummaryMessage
+    buildWorkspaceSummaryMessage,
+    buildWorkspaceCancelledMessage
 } = require('../validator');
 
 suite('validator', () => {
@@ -275,6 +276,31 @@ suite('validator', () => {
 
         test('uses singular "file" for count of 1', () => {
             assert.ok(buildWorkspaceSummaryMessage(1, 0, 0).includes('1 file scanned'));
+        });
+    });
+
+    suite('buildWorkspaceCancelledMessage', () => {
+        test('states the run was cancelled and how many files were scanned', () => {
+            const msg = buildWorkspaceCancelledMessage(3, 0, 0);
+            assert.ok(/cancel/i.test(msg));
+            assert.ok(msg.includes('3 files scanned'));
+        });
+
+        test('reports partial SOQL/SOSL counts with "so far" wording', () => {
+            const msg = buildWorkspaceCancelledMessage(2, 4, 1);
+            assert.ok(msg.includes('4 SOQL'));
+            assert.ok(msg.includes('1 SOSL'));
+            assert.ok(msg.includes('so far'));
+        });
+
+        test('uses singular "file" for a count of 1', () => {
+            assert.ok(buildWorkspaceCancelledMessage(1, 0, 0).includes('1 file scanned'));
+        });
+
+        test('reports no queries found so far when counts are zero', () => {
+            const msg = buildWorkspaceCancelledMessage(5, 0, 0);
+            assert.ok(msg.includes('No SOQL queries found so far'));
+            assert.ok(msg.includes('No SOSL queries found so far'));
         });
     });
 
