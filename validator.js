@@ -91,6 +91,17 @@ function buildMetadataIndex(objectFsPaths = [], fieldFsPaths = [], baseline = {}
  * namespaced (managed-package) objects can't be disproven from local source, so
  * they are never flagged.
  */
+/**
+ * Heuristic check that a quoted token is a Salesforce record Id rather than an
+ * arbitrary 15/18-char string: it must be the right length and its 3-char key
+ * prefix must contain a digit (true of standard prefixes like 001/003/500 and
+ * custom-object prefixes like a0X). This avoids flagging plain words.
+ */
+function isLikelySalesforceId(id) {
+    if (id.length !== 15 && id.length !== 18) return false;
+    return /\d/.test(id.slice(0, 3));
+}
+
 function checkUnknownObject(objectName, index) {
     if (!objectName) return false;
     const lower = objectName.toLowerCase();
@@ -859,7 +870,7 @@ const RULES = [
                 const whereClauseOffset = m.index + whereMatch.index + (whereMatch[0].length - whereClause.length);
                 while ((idMatch = idPattern.exec(whereClause)) !== null) {
                     const id = idMatch[1];
-                    if (id.length !== 15 && id.length !== 18) continue;
+                    if (!isLikelySalesforceId(id)) continue;
                     const idStart = whereClauseOffset + idMatch.index;
                     findings.push({
                         ruleId: 'security/hardcoded-id',
@@ -1263,6 +1274,16 @@ function matchesGlob(fileName, globs) {
     return globs.some(glob => globToRegExp(glob).test(normalized));
 }
 
+// Counts query findings for the summary popup. Dynamic-query findings
+// (type 'dynamic-soql' / 'dynamic-sosl') are counted alongside their inline
+// counterparts so the popup total is not silently under-reported.
+function countQueriesByType(findings) {
+    return {
+        soqlCount: findings.filter(f => f.type === 'SOQL' || f.type === 'dynamic-soql').length,
+        soslCount: findings.filter(f => f.type === 'SOSL' || f.type === 'dynamic-sosl').length
+    };
+}
+
 function buildSummaryMessage(soqlCount, soslCount) {
     let message = '';
 
@@ -1316,6 +1337,8 @@ module.exports = {
     buildMetadataIndex,
     checkUnknownObject,
     checkUnknownFields,
+    isLikelySalesforceId,
+    countQueriesByType,
     findQueries,
     isExemptFile,
     isDaoFile,

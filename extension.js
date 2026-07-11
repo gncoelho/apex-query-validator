@@ -3,7 +3,7 @@ const path = require('path');
 const {
     runRules, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
     matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage,
-    splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod, buildMetadataIndex
+    splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod, buildMetadataIndex, countQueriesByType
 } = require('./validator');
 const { STANDARD_OBJECTS, COMMON_STANDARD_FIELDS } = require('./metadata-baseline');
 
@@ -151,10 +151,7 @@ function applyDocumentValidation(document, diagnosticCollection, {
         })));
     }
 
-    return {
-        soqlCount: findings.filter(f => f.type === 'SOQL').length,
-        soslCount: findings.filter(f => f.type === 'SOSL').length
-    };
+    return countQueriesByType(findings);
 }
 
 async function runValidation(document, diagnosticCollection, { silent }) {

@@ -24,6 +24,8 @@ const {
     buildMetadataIndex,
     checkUnknownObject,
     checkUnknownFields,
+    isLikelySalesforceId,
+    countQueriesByType,
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
@@ -805,6 +807,31 @@ suite('validator', () => {
             const r = runRules("[SELECT Id FROM Account WHERE Id = '001000000000001' LIMIT 1]", cats);
             const f = r.find(x => x.ruleId === 'security/hardcoded-id');
             assert.ok(f.message.includes('001000000000001'));
+        });
+
+        test('does not flag a 15-char alphabetic string with no digit prefix', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name = 'PARTNERACCOUNTS' LIMIT 1]", cats);
+            assert.ok(!r.some(x => x.ruleId === 'security/hardcoded-id'));
+        });
+    });
+
+    suite('isLikelySalesforceId', () => {
+        test('true for a 15-char id with a digit prefix', () => assert.strictEqual(isLikelySalesforceId('001000000000001'), true));
+        test('true for an 18-char id', () => assert.strictEqual(isLikelySalesforceId('001000000000001AAA'), true));
+        test('false for a 15-char alphabetic string', () => assert.strictEqual(isLikelySalesforceId('PARTNERACCOUNTS'), false));
+        test('false when the 3-char prefix has no digit', () => assert.strictEqual(isLikelySalesforceId('ABCDEFGHIJKLMN1'), false));
+        test('false for a wrong length', () => assert.strictEqual(isLikelySalesforceId('001000'), false));
+    });
+
+    suite('countQueriesByType', () => {
+        test('counts dynamic-soql alongside SOQL', () => {
+            const findings = [{ type: 'SOQL' }, { type: 'dynamic-soql' }, { type: 'governor' }];
+            assert.strictEqual(countQueriesByType(findings).soqlCount, 2);
+        });
+
+        test('counts dynamic-sosl alongside SOSL', () => {
+            const findings = [{ type: 'SOSL' }, { type: 'dynamic-sosl' }];
+            assert.strictEqual(countQueriesByType(findings).soslCount, 2);
         });
     });
 
