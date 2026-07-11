@@ -545,6 +545,27 @@ const RULES = [
         }
     },
     {
+        id: 'security/dynamic-sosl-concat',
+        category: 'security',
+        check(text) {
+            const findings = [];
+            for (const call of findDynamicQueryCalls(text)) {
+                if (call.kind !== 'sosl') continue;
+                if (call.argEnd === -1 || !hasUnquotedPlus(call.argText)) continue;
+                findings.push({
+                    ruleId: 'security/dynamic-sosl-concat',
+                    category: 'security',
+                    message: `${call.method}() argument uses string concatenation — this is a SOSL injection risk. Wrap user input in String.escapeSingleQuotes().`,
+                    start: call.callStart,
+                    end: call.argEnd + 1,
+                    type: 'dynamic-sosl',
+                    objects: []
+                });
+            }
+            return findings;
+        }
+    },
+    {
         id: 'security/hardcoded-id',
         category: 'security',
         check(text) {

@@ -539,6 +539,47 @@ suite('validator', () => {
         });
     });
 
+    suite('security/dynamic-sosl-concat', () => {
+        const cats = { security: true, dao: false, correctness: false, performance: false, style: false, governor: false };
+
+        test('flags Search.query() with string concatenation', () => {
+            const r = runRules("Search.query('FIND ' + term + ' IN ALL FIELDS')", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+
+        test('flags Database.search() with string concatenation', () => {
+            const r = runRules("Database.search('FIND ' + term + ' IN ALL FIELDS')", cats);
+            assert.ok(r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+
+        test('does not flag a Search.query() with a plain variable', () => {
+            const r = runRules('Search.query(searchString)', cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+
+        test('does not flag a Search.query() with a string literal', () => {
+            const r = runRules("Search.query('FIND Acme IN ALL FIELDS')", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+
+        test('does not flag Database.query() — that is the SOQL concat rule', () => {
+            const r = runRules("Database.query('SELECT Id FROM ' + obj)", cats);
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+
+        test('message mentions SOSL injection', () => {
+            const r = runRules("Search.query('FIND ' + term + ' IN ALL FIELDS')", cats);
+            const f = r.find(x => x.ruleId === 'security/dynamic-sosl-concat');
+            assert.ok(f.message.toLowerCase().includes('sosl'));
+            assert.ok(f.message.toLowerCase().includes('injection'));
+        });
+
+        test('returns no findings when security category is disabled', () => {
+            const r = runRules("Search.query('FIND ' + term + ' IN ALL FIELDS')", { security: false });
+            assert.ok(!r.some(f => f.ruleId === 'security/dynamic-sosl-concat'));
+        });
+    });
+
     suite('security/hardcoded-id', () => {
         const cats = { security: true, dao: false, performance: false };
 
