@@ -80,6 +80,11 @@
           "default": ["ContentDocument", "ContentVersion", "Task", "Event", "EmailMessage", "FeedItem"],
           "description": "SObject names considered 'large'. A SOQL query on any of these objects without a WHERE clause triggers the perf/unbounded-large-object rule."
         },
+        "apexQueryValidator.enableCorrectnessRules": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable correctness rules that catch guaranteed runtime/compile failures (e.g. a single-row query assignment without LIMIT 1)."
+        },
         "apexQueryValidator.enablePerformanceRules": {
           "type": "boolean",
           "default": true,

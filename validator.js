@@ -120,6 +120,43 @@ function isInsideLoop(text, queryStart) {
 }
 
 // ---------------------------------------------------------------------------
+// Correctness rule helpers
+// ---------------------------------------------------------------------------
+
+/** True when a declared type is a collection (so a query into it returns many rows). */
+function isCollectionType(type) {
+    if (/\[\s*\]$/.test(type)) return true; // Account[]
+    return /^(List|Set|Map|Iterable)\b/i.test(type.trim());
+}
+
+/**
+ * Determines whether a bracket query at [queryStart, queryEnd) is consumed in a
+ * single-row context — i.e. assigned to a single (non-collection) SObject
+ * variable (`Account a = [...]`) or immediately indexed (`[...][0]`).
+ *
+ * Deliberately conservative: it only reports `singleRow: true` for a clear
+ * `Type ident =` declaration or a trailing `[0]`, so returns, reassignments,
+ * `new Map<>([...])`, and SOQL for-loops (`for (Account a : [...])`) are not
+ * flagged.
+ */
+function getAssignmentContext(text, queryStart, queryEnd) {
+    // `[...][0]` — single-row access by index.
+    if (/^\s*\[\s*0\s*\]/.test(text.slice(queryEnd))) return { singleRow: true };
+
+    const before = text.slice(0, queryStart);
+    const stmtStart = Math.max(
+        before.lastIndexOf(';'),
+        before.lastIndexOf('{'),
+        before.lastIndexOf('}')
+    );
+    const fragment = before.slice(stmtStart + 1).trim();
+    const m = /^(.+?)\s+\w+\s*=$/.exec(fragment);
+    if (!m) return { singleRow: false };
+    if (isCollectionType(m[1])) return { singleRow: false };
+    return { singleRow: true };
+}
+
+// ---------------------------------------------------------------------------
 // Rule infrastructure
 // ---------------------------------------------------------------------------
 
@@ -178,6 +215,32 @@ const RULES = [
                     end: m.index + m[0].length,
                     type: 'SOSL',
                     objects: extractSoslObjects(m[0])
+                });
+            }
+            return findings;
+        }
+    },
+
+    // --- Correctness ---------------------------------------------------------
+    {
+        id: 'correctness/single-row-no-limit',
+        category: 'correctness',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const end = m.index + q.length;
+                // LIMIT 1 makes the single-row intent safe.
+                if (/\bLIMIT\s+1\b/i.test(q)) continue;
+                if (!getAssignmentContext(text, m.index, end).singleRow) continue;
+                findings.push({
+                    ruleId: 'correctness/single-row-no-limit',
+                    category: 'correctness',
+                    message: 'SOQL query result is used as a single record without LIMIT 1 — this throws a QueryException if it returns 0 or more than 1 row. Add LIMIT 1.',
+                    start: m.index,
+                    end,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(q)
                 });
             }
             return findings;
@@ -703,7 +766,7 @@ function runRules(text, enabledCategories = {}, options = {}) {
 // ---------------------------------------------------------------------------
 
 function findQueries(text) {
-    return runRules(text, { dao: true, performance: false, security: false, style: false, governor: false }).map(f => ({
+    return runRules(text, { dao: true, correctness: false, performance: false, security: false, style: false, governor: false }).map(f => ({
         type: f.type,
         match: text.slice(f.start, f.end),
         start: f.start,
@@ -777,6 +840,8 @@ module.exports = {
     buildLineStarts,
     offsetToLine,
     collectSuppressions,
+    isCollectionType,
+    getAssignmentContext,
     extractSoqlObjects,
     extractSoslObjects,
     findQueries,

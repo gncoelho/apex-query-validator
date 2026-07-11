@@ -25,6 +25,7 @@ function getConfig() {
             : vscode.DiagnosticSeverity.Warning,
         autoValidate: config.get('autoValidate'),
         daoKeywords: config.get('daoFilenameKeywords'),
+        enableCorrectnessRules: config.get('enableCorrectnessRules'),
         enablePerformanceRules: config.get('enablePerformanceRules'),
         enableSecurityRules: config.get('enableSecurityRules'),
         enableStyleRules: config.get('enableStyleRules'),
@@ -69,6 +70,7 @@ function clearDocument(document, diagnosticCollection) {
 
 function applyDocumentValidation(document, diagnosticCollection, {
     severity,
+    enableCorrectnessRules,
     enablePerformanceRules,
     enableSecurityRules,
     enableStyleRules,
@@ -81,6 +83,7 @@ function applyDocumentValidation(document, diagnosticCollection, {
     const text = document.getText();
     const findings = runRules(text, {
         dao: true,
+        correctness: enableCorrectnessRules,
         performance: enablePerformanceRules,
         security: enableSecurityRules,
         style: enableStyleRules,
@@ -123,7 +126,7 @@ function applyDocumentValidation(document, diagnosticCollection, {
 
 function runValidation(document, diagnosticCollection, { silent }) {
     const { exemptKeywords, includeGlobs, severity, autoValidate,
-        enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+        enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
         maxSelectFields, largeObjects, maxQueriesPerFile, ruleOverrides } = getConfig();
 
     if (!matchesGlob(document.fileName, includeGlobs)) {
@@ -144,7 +147,7 @@ function runValidation(document, diagnosticCollection, { silent }) {
     }
 
     const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
-        severity, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+        severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
         maxSelectFields, largeObjects, maxQueriesPerFile, ruleOverrides
     });
 
@@ -161,7 +164,7 @@ function shouldClearOnClose(uriString, workspaceValidatedUris) {
 
 async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
     const { exemptKeywords, includeGlobs, severity,
-        enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+        enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
         maxSelectFields, largeObjects, maxQueriesPerFile, ruleOverrides } = getConfig();
 
     // Reset tracked URIs so a re-run starts clean.
@@ -187,7 +190,7 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
                 if (!matchesGlob(document.fileName, includeGlobs)) continue;
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
                 const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
-                    severity, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
+                    severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules,
                     maxSelectFields, largeObjects, maxQueriesPerFile, ruleOverrides
                 });
                 // Track this URI so onDidCloseTextDocument does not wipe its diagnostics.

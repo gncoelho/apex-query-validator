@@ -9,6 +9,8 @@ const {
     buildLineStarts,
     offsetToLine,
     collectSuppressions,
+    isCollectionType,
+    getAssignmentContext,
     isExemptFile,
     isDaoFile,
     extractSoqlObjects,
@@ -865,6 +867,67 @@ suite('validator', () => {
         });
     });
 
+    suite('correctness/single-row-no-limit', () => {
+        const cats = { correctness: true, dao: false, performance: false, security: false, style: false, governor: false };
+
+        test('flags a single-SObject assignment without LIMIT 1', () => {
+            const r = runRules('Account a = [SELECT Id FROM Account];', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('does not flag when LIMIT 1 is present', () => {
+            const r = runRules('Account a = [SELECT Id FROM Account LIMIT 1];', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('flags when a non-1 LIMIT is present', () => {
+            const r = runRules('Account a = [SELECT Id FROM Account LIMIT 5];', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('does not flag a List assignment', () => {
+            const r = runRules('List<Account> a = [SELECT Id FROM Account];', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('does not flag an array-typed assignment', () => {
+            const r = runRules('Account[] a = [SELECT Id FROM Account];', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('does not flag a SOQL for-loop', () => {
+            const r = runRules('for (Account a : [SELECT Id FROM Account]) { }', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('flags immediate [0] indexing without LIMIT 1', () => {
+            const r = runRules('System.debug([SELECT Id FROM Account][0]);', cats);
+            assert.ok(r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('does not flag a new Map<>([...]) bulk construction', () => {
+            const r = runRules('Map<Id, Account> m = new Map<Id, Account>([SELECT Id FROM Account]);', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('does not flag a bare return statement', () => {
+            const r = runRules('return [SELECT Id FROM Account];', cats);
+            assert.ok(!r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+
+        test('message mentions LIMIT 1 and QueryException', () => {
+            const r = runRules('Account a = [SELECT Id FROM Account];', cats);
+            const f = r.find(x => x.ruleId === 'correctness/single-row-no-limit');
+            assert.ok(f.message.includes('LIMIT 1'));
+            assert.ok(f.message.includes('QueryException'));
+        });
+
+        test('respects the correctness category toggle', () => {
+            const r = runRules('Account a = [SELECT Id FROM Account];', { correctness: false });
+            assert.ok(!r.some(f => f.ruleId === 'correctness/single-row-no-limit'));
+        });
+    });
+
     // -------------------------------------------------------------------------
     // Direct helper function tests
     // -------------------------------------------------------------------------
@@ -1011,6 +1074,37 @@ suite('validator', () => {
             const text = 'for (Integer i = 0; i < 3; i++) { for (Integer j = 0; j < 3; j++) { Integer x = 1; } [SELECT Id FROM Account LIMIT 1]; }';
             const queryStart = text.lastIndexOf('[');
             assert.strictEqual(isInsideLoop(text, queryStart), true);
+        });
+    });
+
+    suite('isCollectionType', () => {
+        test('List<...> is a collection', () => assert.strictEqual(isCollectionType('List<Account>'), true));
+        test('Set<...> is a collection', () => assert.strictEqual(isCollectionType('Set<Id>'), true));
+        test('Map<...> is a collection', () => assert.strictEqual(isCollectionType('Map<Id, Account>'), true));
+        test('array type is a collection', () => assert.strictEqual(isCollectionType('Account[]'), true));
+        test('a plain SObject type is not a collection', () => assert.strictEqual(isCollectionType('Account'), false));
+    });
+
+    suite('getAssignmentContext', () => {
+        test('detects a single-SObject declaration', () => {
+            const text = 'Account a = [SELECT Id FROM Account];';
+            const start = text.indexOf('[SELECT');
+            const end = start + '[SELECT Id FROM Account]'.length;
+            assert.strictEqual(getAssignmentContext(text, start, end).singleRow, true);
+        });
+
+        test('does not treat a List declaration as single-row', () => {
+            const text = 'List<Account> a = [SELECT Id FROM Account];';
+            const start = text.indexOf('[SELECT');
+            const end = start + '[SELECT Id FROM Account]'.length;
+            assert.strictEqual(getAssignmentContext(text, start, end).singleRow, false);
+        });
+
+        test('detects trailing [0] indexing outside an assignment', () => {
+            const text = 'foo(  [SELECT Id FROM Account][0] )';
+            const start = text.indexOf('[SELECT');
+            const end = start + '[SELECT Id FROM Account]'.length;
+            assert.strictEqual(getAssignmentContext(text, start, end).singleRow, true);
         });
     });
 
