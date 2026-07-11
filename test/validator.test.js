@@ -21,6 +21,7 @@ const {
     extractSoqlObjects,
     extractSoslObjects,
     buildDaoMethod,
+    buildMetadataIndex,
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
@@ -1569,6 +1570,37 @@ suite('validator', () => {
         test('falls back to SObject when no object name is known', () => {
             const { returnType } = buildDaoMethod('[SELECT Id FROM Account]', null);
             assert.strictEqual(returnType, 'List<SObject>');
+        });
+    });
+
+    suite('buildMetadataIndex', () => {
+        const objectPaths = ['/proj/force-app/main/default/objects/Broker__c/Broker__c.object-meta.xml'];
+        const fieldPaths = [
+            '/proj/force-app/main/default/objects/Broker__c/fields/Phone__c.field-meta.xml',
+            '/proj/force-app/main/default/objects/Broker__c/fields/Email__c.field-meta.xml'
+        ];
+        const baseline = { standardObjects: ['Account'], standardFields: ['Id', 'Name'] };
+
+        test('includes the custom object derived from its folder', () => {
+            assert.ok(buildMetadataIndex(objectPaths, fieldPaths, baseline).objects.has('broker__c'));
+        });
+
+        test('includes standard objects from the baseline', () => {
+            assert.ok(buildMetadataIndex(objectPaths, fieldPaths, baseline).objects.has('account'));
+        });
+
+        test('maps custom fields to their object (lowercased)', () => {
+            const fields = buildMetadataIndex(objectPaths, fieldPaths, baseline).fieldsByObject.get('broker__c');
+            assert.ok(fields.has('phone__c'));
+            assert.ok(fields.has('email__c'));
+        });
+
+        test('seeds common standard fields into each object entry', () => {
+            assert.ok(buildMetadataIndex(objectPaths, fieldPaths, baseline).fieldsByObject.get('broker__c').has('id'));
+        });
+
+        test('registers an object even when only field files are present', () => {
+            assert.ok(buildMetadataIndex([], fieldPaths, baseline).objects.has('broker__c'));
         });
     });
 

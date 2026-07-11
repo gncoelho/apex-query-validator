@@ -54,6 +54,37 @@ function buildDaoMethod(queryText, objectName) {
     return { methodName, returnType, code };
 }
 
+/**
+ * Builds an offline object/field index from SFDX metadata file paths.
+ *   objectFsPaths: paths to `<Object>.object-meta.xml`
+ *   fieldFsPaths:  paths to `<Object>/fields/<Field>.field-meta.xml`
+ * Returns `{ objects: Set<lowerName>, fieldsByObject: Map<lowerObj, Set<lowerField>> }`,
+ * seeded with the standard-object/field baseline so standard names are known.
+ */
+function buildMetadataIndex(objectFsPaths = [], fieldFsPaths = [], baseline = {}) {
+    const objects = new Set((baseline.standardObjects || []).map(o => o.toLowerCase()));
+    const fieldsByObject = new Map();
+    const commonFields = (baseline.standardFields || []).map(f => f.toLowerCase());
+    const baseName = p => p.split(/[\\/]/).pop();
+    const ensureFields = key => {
+        if (!fieldsByObject.has(key)) fieldsByObject.set(key, new Set(commonFields));
+        return fieldsByObject.get(key);
+    };
+
+    for (const p of objectFsPaths) {
+        objects.add(baseName(p).replace(/\.object-meta\.xml$/i, '').toLowerCase());
+    }
+    for (const p of fieldFsPaths) {
+        const parts = p.split(/[\\/]/);
+        const fieldsIdx = parts.lastIndexOf('fields');
+        if (fieldsIdx < 1) continue;
+        const objKey = parts[fieldsIdx - 1].toLowerCase();
+        objects.add(objKey);
+        ensureFields(objKey).add(baseName(p).replace(/\.field-meta\.xml$/i, '').toLowerCase());
+    }
+    return { objects, fieldsByObject };
+}
+
 // ---------------------------------------------------------------------------
 // Performance rule helpers
 // ---------------------------------------------------------------------------
@@ -1191,6 +1222,7 @@ module.exports = {
     extractSoqlObjects,
     extractSoslObjects,
     buildDaoMethod,
+    buildMetadataIndex,
     findQueries,
     isExemptFile,
     isDaoFile,

@@ -1,7 +1,7 @@
 const assert = require('assert');
 const vscode = require('vscode');
 const { buildWorkspaceSummaryMessage } = require('../validator');
-const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction } = require('../extension');
+const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction, getMetadataIndex, invalidateMetadataIndex } = require('../extension');
 
 suite('Extension Test Suite', () => {
     suiteSetup(async () => {
@@ -120,6 +120,28 @@ suite('Extension Test Suite', () => {
             vscode.window.withProgress = origWithProgress;
             vscode.window.showInformationMessage = origShowInfo;
         }
+    });
+
+    suite('getMetadataIndex', () => {
+        test('builds and caches an index from workspace metadata files', async () => {
+            const origFindFiles = vscode.workspace.findFiles;
+            vscode.workspace.findFiles = async (glob) => {
+                if (String(glob).includes('object-meta')) {
+                    return [vscode.Uri.file('/p/objects/Broker__c/Broker__c.object-meta.xml')];
+                }
+                return [vscode.Uri.file('/p/objects/Broker__c/fields/Phone__c.field-meta.xml')];
+            };
+            try {
+                invalidateMetadataIndex();
+                const idx = await getMetadataIndex();
+                assert.ok(idx.objects.has('broker__c'));
+                assert.ok(idx.fieldsByObject.get('broker__c').has('phone__c'));
+                assert.ok(idx.objects.has('account'), 'baseline standard objects should be present');
+            } finally {
+                vscode.workspace.findFiles = origFindFiles;
+                invalidateMetadataIndex();
+            }
+        });
     });
 
     // --- shouldClearOnClose unit tests ---

@@ -3,8 +3,31 @@ const path = require('path');
 const {
     runRules, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
     matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage,
-    splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod
+    splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod, buildMetadataIndex
 } = require('./validator');
+const { STANDARD_OBJECTS, COMMON_STANDARD_FIELDS } = require('./metadata-baseline');
+
+// Cached offline object/field index, rebuilt lazily and invalidated by a
+// FileSystemWatcher on the SFDX metadata files.
+let metadataIndexCache = null;
+
+async function getMetadataIndex() {
+    if (metadataIndexCache) return metadataIndexCache;
+    const [objectUris, fieldUris] = await Promise.all([
+        vscode.workspace.findFiles('**/objects/**/*.object-meta.xml'),
+        vscode.workspace.findFiles('**/objects/**/fields/*.field-meta.xml')
+    ]);
+    metadataIndexCache = buildMetadataIndex(
+        objectUris.map(u => u.fsPath),
+        fieldUris.map(u => u.fsPath),
+        { standardObjects: STANDARD_OBJECTS, standardFields: COMMON_STANDARD_FIELDS }
+    );
+    return metadataIndexCache;
+}
+
+function invalidateMetadataIndex() {
+    metadataIndexCache = null;
+}
 
 const decorationType = vscode.window.createTextEditorDecorationType({
     backgroundColor: 'rgba(255, 255, 0, 0.2)',
@@ -481,6 +504,13 @@ function activate(context) {
             diagnosticCollection.delete(document.uri);
         }
     }));
+
+    // Invalidate the cached metadata index when object/field files change.
+    const metadataWatcher = vscode.workspace.createFileSystemWatcher('**/objects/**/*-meta.xml');
+    metadataWatcher.onDidCreate(invalidateMetadataIndex);
+    metadataWatcher.onDidChange(invalidateMetadataIndex);
+    metadataWatcher.onDidDelete(invalidateMetadataIndex);
+    context.subscriptions.push(metadataWatcher);
 }
 
 function deactivate() {}
@@ -493,5 +523,7 @@ module.exports = {
     resolveSeverity,
     diagnosticRuleId,
     QUICK_FIXES,
-    buildDaoMethodAction
+    buildDaoMethodAction,
+    getMetadataIndex,
+    invalidateMetadataIndex
 };
