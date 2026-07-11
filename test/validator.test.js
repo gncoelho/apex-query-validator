@@ -500,6 +500,56 @@ suite('validator', () => {
         });
     });
 
+    suite('perf/non-selective-filter', () => {
+        const cats = { performance: true, dao: false, correctness: false, security: false, style: false, governor: false };
+
+        test('flags a leading-wildcard LIKE', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name LIKE '%acme' LIMIT 10]", cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/non-selective-filter'));
+        });
+
+        test('does not flag a trailing-wildcard LIKE', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name LIKE 'acme%' LIMIT 10]", cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/non-selective-filter'));
+        });
+
+        test('flags a != operator', () => {
+            const r = runRules('[SELECT Id FROM Account WHERE Id != null LIMIT 10]', cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/non-selective-filter'));
+        });
+
+        test('flags a <> operator', () => {
+            const r = runRules('[SELECT Id FROM Account WHERE Name <> null LIMIT 10]', cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/non-selective-filter'));
+        });
+
+        test('flags NOT IN', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name NOT IN ('a','b') LIMIT 10]", cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/non-selective-filter'));
+        });
+
+        test('flags NOT LIKE', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name NOT LIKE 'a%' LIMIT 10]", cats);
+            assert.ok(r.some(f => f.ruleId === 'perf/non-selective-filter'));
+        });
+
+        test('does not flag a selective equality filter', () => {
+            const r = runRules("[SELECT Id FROM Account WHERE Name = 'Acme' LIMIT 10]", cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/non-selective-filter'));
+        });
+
+        test('does not flag a query with no WHERE clause', () => {
+            const r = runRules('[SELECT Id FROM Account LIMIT 10]', cats);
+            assert.ok(!r.some(f => f.ruleId === 'perf/non-selective-filter'));
+        });
+
+        test('finding has information severity', () => {
+            const r = runRules('[SELECT Id FROM Account WHERE Id != null LIMIT 10]', cats);
+            const f = r.find(x => x.ruleId === 'perf/non-selective-filter');
+            assert.strictEqual(f.severity, 'information');
+        });
+    });
+
     suite('security/dynamic-soql-concat', () => {
         const cats = { security: true, dao: false, performance: false };
 

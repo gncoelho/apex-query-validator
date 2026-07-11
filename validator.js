@@ -595,6 +595,37 @@ const RULES = [
         }
     },
 
+    {
+        id: 'perf/non-selective-filter',
+        category: 'performance',
+        check(text) {
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                const whereMatch = /\bWHERE\b([\s\S]*)/i.exec(q);
+                if (!whereMatch) continue;
+                const where = whereMatch[1];
+                const reasons = [];
+                if (/\bLIKE\s+'%/i.test(where)) reasons.push("leading-wildcard LIKE '%...'");
+                if (/\bNOT\s+LIKE\b/i.test(where)) reasons.push('NOT LIKE');
+                if (/\bNOT\s+IN\b/i.test(where)) reasons.push('NOT IN');
+                if (/!=|<>/.test(where)) reasons.push('!= / <>');
+                if (!reasons.length) continue;
+                findings.push({
+                    ruleId: 'perf/non-selective-filter',
+                    category: 'performance',
+                    severity: 'information',
+                    message: `SOQL WHERE clause uses a non-selective filter (${reasons.join(', ')}) — it cannot use an index and may scan many rows.`,
+                    start: m.index,
+                    end: m.index + q.length,
+                    type: 'SOQL',
+                    objects: extractSoqlObjects(q)
+                });
+            }
+            return findings;
+        }
+    },
+
     // --- Security ------------------------------------------------------------
     {
         id: 'security/dynamic-soql-concat',
