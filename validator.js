@@ -100,6 +100,32 @@ function checkUnknownObject(objectName, index) {
     return true;
 }
 
+/**
+ * Returns the SELECT fields that can be positively disproven: simple custom
+ * (`__c`) fields absent from the queried object's field set. Returns [] (skips)
+ * for queries with a subquery, or when the object's fields aren't indexed.
+ * Standard fields, relationship paths, functions, aliases, and namespaced fields
+ * are all skipped by the simple-identifier test.
+ */
+function checkUnknownFields(queryText, index) {
+    if (!index || !index.fieldsByObject) return [];
+    if (/\(\s*SELECT\b/i.test(queryText)) return []; // subquery -> too ambiguous
+    const objKey = (extractSoqlObjects(queryText)[0] || '').toLowerCase();
+    const fields = index.fieldsByObject.get(objKey);
+    if (!fields) return []; // object unknown or field list not indexed
+    const fieldList = extractFieldList(queryText);
+    if (!fieldList) return [];
+
+    const unknown = [];
+    for (const raw of fieldList.split(',')) {
+        const seg = raw.trim();
+        if (!/^\w+__c$/i.test(seg)) continue;          // only simple custom fields
+        if (seg.slice(0, -3).includes('__')) continue; // namespaced -> managed package
+        if (!fields.has(seg.toLowerCase())) unknown.push(seg);
+    }
+    return unknown;
+}
+
 // ---------------------------------------------------------------------------
 // Performance rule helpers
 // ---------------------------------------------------------------------------
@@ -1054,6 +1080,30 @@ const RULES = [
             }
             return findings;
         }
+    },
+    {
+        id: 'metadata/unknown-field',
+        category: 'metadata',
+        check(text, options = {}) {
+            const index = options.metadataIndex;
+            if (!index) return [];
+            const findings = [];
+            for (const m of text.matchAll(freshRegex(SOQL_PATTERN))) {
+                const q = m[0];
+                for (const field of checkUnknownFields(q, index)) {
+                    findings.push({
+                        ruleId: 'metadata/unknown-field',
+                        category: 'metadata',
+                        message: `Field '${field}' was not found on the queried object in local SFDX metadata — check for a typo.`,
+                        start: m.index,
+                        end: m.index + q.length,
+                        type: 'SOQL',
+                        objects: extractSoqlObjects(q)
+                    });
+                }
+            }
+            return findings;
+        }
     }
 ];
 
@@ -1265,6 +1315,7 @@ module.exports = {
     buildDaoMethod,
     buildMetadataIndex,
     checkUnknownObject,
+    checkUnknownFields,
     findQueries,
     isExemptFile,
     isDaoFile,

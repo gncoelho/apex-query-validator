@@ -23,6 +23,7 @@ const {
     buildDaoMethod,
     buildMetadataIndex,
     checkUnknownObject,
+    checkUnknownFields,
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
@@ -1647,6 +1648,60 @@ suite('validator', () => {
         test('false for a standard object', () => assert.strictEqual(checkUnknownObject('Account', index), false));
         test('false for a namespaced custom object', () => assert.strictEqual(checkUnknownObject('ns__Thing__c', index), false));
         test('false when object name is empty', () => assert.strictEqual(checkUnknownObject('', index), false));
+    });
+
+    suite('metadata/unknown-field', () => {
+        const cats = { metadata: true, dao: false, correctness: false, performance: false, security: false, style: false, governor: false };
+        const index = {
+            objects: new Set(['broker__c']),
+            fieldsByObject: new Map([['broker__c', new Set(['id', 'name', 'phone__c'])]])
+        };
+        const run = (q) => runRules(q, cats, { metadataIndex: index });
+
+        test('flags an unknown custom field', () => {
+            assert.ok(run('[SELECT Id, Missing__c FROM Broker__c]').some(f => f.ruleId === 'metadata/unknown-field'));
+        });
+
+        test('does not flag a known custom field', () => {
+            assert.ok(!run('[SELECT Id, Phone__c FROM Broker__c]').some(f => f.ruleId === 'metadata/unknown-field'));
+        });
+
+        test('does not flag standard fields', () => {
+            assert.ok(!run('[SELECT Id, Name FROM Broker__c]').some(f => f.ruleId === 'metadata/unknown-field'));
+        });
+
+        test('does not flag relationship traversal', () => {
+            assert.ok(!run('[SELECT Id, Owner.Name FROM Broker__c]').some(f => f.ruleId === 'metadata/unknown-field'));
+        });
+
+        test('does not flag a namespaced custom field', () => {
+            assert.ok(!run('[SELECT Id, ns__Extra__c FROM Broker__c]').some(f => f.ruleId === 'metadata/unknown-field'));
+        });
+
+        test('skips queries with a child subquery', () => {
+            assert.ok(!run('[SELECT Id, Missing__c, (SELECT Id FROM Contacts) FROM Broker__c]').some(f => f.ruleId === 'metadata/unknown-field'));
+        });
+
+        test('skips when the object is not indexed', () => {
+            assert.ok(!run('[SELECT Missing__c FROM Unknown__c]').some(f => f.ruleId === 'metadata/unknown-field'));
+        });
+
+        test('is a no-op without a metadata index', () => {
+            assert.ok(!runRules('[SELECT Missing__c FROM Broker__c]', cats).some(f => f.ruleId === 'metadata/unknown-field'));
+        });
+    });
+
+    suite('checkUnknownFields', () => {
+        const index = { objects: new Set(['broker__c']), fieldsByObject: new Map([['broker__c', new Set(['id', 'phone__c'])]]) };
+        test('returns unknown custom fields', () => {
+            assert.deepStrictEqual(checkUnknownFields('[SELECT Id, Missing__c FROM Broker__c]', index), ['Missing__c']);
+        });
+        test('returns empty for known fields', () => {
+            assert.deepStrictEqual(checkUnknownFields('[SELECT Id, Phone__c FROM Broker__c]', index), []);
+        });
+        test('returns empty when the object has no indexed fields', () => {
+            assert.deepStrictEqual(checkUnknownFields('[SELECT Missing__c FROM Other__c]', index), []);
+        });
     });
 
     suite('isCollectionType', () => {
