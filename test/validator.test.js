@@ -12,6 +12,8 @@ const {
     collectSuppressions,
     isCollectionType,
     getAssignmentContext,
+    findDynamicQueryCalls,
+    hasUnquotedPlus,
     isExemptFile,
     isDaoFile,
     extractSoqlObjects,
@@ -1070,6 +1072,35 @@ suite('validator', () => {
         test('returns null when no macro present', () => assert.strictEqual(fieldsMacroType('[SELECT Id FROM Account]'), null));
     });
 
+    suite('dynamic-query call coverage', () => {
+        const gov = { governor: true, dao: false, correctness: false, performance: false, security: false, style: false };
+
+        test('flags Database.getQueryLocator() as a dynamic SOQL call', () => {
+            const r = runRules('Database.getQueryLocator(q)', gov);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+
+        test('flags Database.countQuery() as a dynamic SOQL call', () => {
+            const r = runRules('Database.countQuery(q)', gov);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+
+        test('flags Database.queryWithBinds() as a dynamic SOQL call', () => {
+            const r = runRules('Database.queryWithBinds(q, binds, AccessLevel.USER_MODE)', gov);
+            assert.ok(r.some(f => f.ruleId === 'governor/dynamic-soql-call'));
+        });
+
+        test('does not classify queryWithBinds as a SOSL call', () => {
+            const r = runRules('Database.queryWithBinds(q, binds, AccessLevel.USER_MODE)', gov);
+            assert.ok(!r.some(f => f.ruleId === 'governor/dynamic-sosl-call'));
+        });
+
+        test('distinguishes query from queryWithBinds (two soql findings)', () => {
+            const r = runRules('Database.query(a); Database.queryWithBinds(b, m, AccessLevel.USER_MODE);', gov);
+            assert.strictEqual(r.filter(f => f.ruleId === 'governor/dynamic-soql-call').length, 2);
+        });
+    });
+
     // -------------------------------------------------------------------------
     // Direct helper function tests
     // -------------------------------------------------------------------------
@@ -1248,6 +1279,45 @@ suite('validator', () => {
             const end = start + '[SELECT Id FROM Account]'.length;
             assert.strictEqual(getAssignmentContext(text, start, end).singleRow, true);
         });
+    });
+
+    suite('findDynamicQueryCalls', () => {
+        test('returns kind soql for Database.query', () => {
+            const [c] = findDynamicQueryCalls('Database.query(x)');
+            assert.strictEqual(c.kind, 'soql');
+            assert.strictEqual(c.isBinds, false);
+            assert.strictEqual(c.method, 'Database.query');
+        });
+
+        test('marks WithBinds variants as isBinds', () => {
+            const [c] = findDynamicQueryCalls('Database.queryWithBinds(x, m, AccessLevel.USER_MODE)');
+            assert.strictEqual(c.isBinds, true);
+        });
+
+        test('returns kind sosl for Search.query', () => {
+            const [c] = findDynamicQueryCalls('Search.query(x)');
+            assert.strictEqual(c.kind, 'sosl');
+        });
+
+        test('captures the argument text with string literals intact', () => {
+            const [c] = findDynamicQueryCalls("Database.query('SELECT Id FROM Account')");
+            assert.strictEqual(c.argText, "'SELECT Id FROM Account'");
+        });
+
+        test('ignores a non-existent object.method combination', () => {
+            assert.strictEqual(findDynamicQueryCalls('Search.getQueryLocator(x)').length, 0);
+        });
+
+        test('returns argEnd -1 for an unterminated call', () => {
+            const [c] = findDynamicQueryCalls('Database.query(');
+            assert.strictEqual(c.argEnd, -1);
+        });
+    });
+
+    suite('hasUnquotedPlus', () => {
+        test('detects a + outside strings', () => assert.strictEqual(hasUnquotedPlus("'a' + b"), true));
+        test('ignores a + inside a string literal', () => assert.strictEqual(hasUnquotedPlus("'a + b'"), false));
+        test('returns false with no +', () => assert.strictEqual(hasUnquotedPlus("'SELECT Id'"), false));
     });
 
     suite('globToRegExp', () => {

@@ -167,6 +167,77 @@ function getAssignmentContext(text, queryStart, queryEnd) {
 }
 
 // ---------------------------------------------------------------------------
+// Dynamic-query helpers
+// ---------------------------------------------------------------------------
+
+// Every dynamic query/search entry point. `*WithBinds` variants pass a bind map
+// and are marked `isBinds: true` (they are the safe form).
+const DYNAMIC_QUERY_METHODS = [
+    { object: 'Database', method: 'query',                    kind: 'soql', isBinds: false },
+    { object: 'Database', method: 'getQueryLocator',          kind: 'soql', isBinds: false },
+    { object: 'Database', method: 'countQuery',               kind: 'soql', isBinds: false },
+    { object: 'Database', method: 'queryWithBinds',           kind: 'soql', isBinds: true },
+    { object: 'Database', method: 'getQueryLocatorWithBinds', kind: 'soql', isBinds: true },
+    { object: 'Database', method: 'countQueryWithBinds',      kind: 'soql', isBinds: true },
+    { object: 'Search',   method: 'query',                    kind: 'sosl', isBinds: false },
+    { object: 'Database', method: 'search',                   kind: 'sosl', isBinds: false }
+];
+
+function lookupDynamicMethod(object, method) {
+    const o = object.toLowerCase();
+    const me = method.toLowerCase();
+    return DYNAMIC_QUERY_METHODS.find(d => d.object.toLowerCase() === o && d.method.toLowerCase() === me);
+}
+
+// Method names ordered longest-first so the alternation prefers, e.g.,
+// `queryWithBinds` over `query`.
+const DYNAMIC_CALL_PATTERN = /\b(Database|Search)\s*\.\s*(getQueryLocatorWithBinds|countQueryWithBinds|queryWithBinds|getQueryLocator|countQuery|query|search)\s*\(/gi;
+
+/**
+ * Finds every dynamic query/search call site in the text. For each returns
+ * `{ kind, method, isBinds, callStart, argStart, argEnd, argText }` where
+ * `argEnd` is the index of the matching close paren (or -1 if unterminated) and
+ * `argText` is the argument source (string literals left intact).
+ */
+function findDynamicQueryCalls(text) {
+    const results = [];
+    const pattern = freshRegex(DYNAMIC_CALL_PATTERN);
+    let m;
+    while ((m = pattern.exec(text)) !== null) {
+        const meta = lookupDynamicMethod(m[1], m[2]);
+        if (!meta) continue; // e.g. Search.getQueryLocator — not a real combination
+        const argStart = m.index + m[0].length;
+        let depth = 1, argEnd = -1;
+        for (let i = argStart; i < text.length; i++) {
+            const ch = text[i];
+            if (ch === '\'' || ch === '"') { i = skipStringLiteral(text, i); continue; }
+            if (ch === '(') { depth++; continue; }
+            if (ch === ')') { depth--; if (depth === 0) { argEnd = i; break; } }
+        }
+        results.push({
+            kind: meta.kind,
+            method: `${m[1]}.${m[2]}`,
+            isBinds: meta.isBinds,
+            callStart: m.index,
+            argStart,
+            argEnd,
+            argText: argEnd === -1 ? text.slice(argStart) : text.slice(argStart, argEnd)
+        });
+    }
+    return results;
+}
+
+/** True when a `+` (concatenation) appears outside string literals in the argument. */
+function hasUnquotedPlus(argText) {
+    for (let i = 0; i < argText.length; i++) {
+        const ch = argText[i];
+        if (ch === '\'' || ch === '"') { i = skipStringLiteral(argText, i); continue; }
+        if (ch === '+') return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Rule infrastructure
 // ---------------------------------------------------------------------------
 
@@ -457,35 +528,15 @@ const RULES = [
         category: 'security',
         check(text) {
             const findings = [];
-            // Match Database.query( and scan forward to find the matching closing
-            // paren, skipping string literals so a ) inside a string doesn't close
-            // the depth counter early. Then check whether any + operator appears
-            // outside of string literals in the argument.
-            const callPattern = /Database\s*\.\s*query\s*\(/gi;
-            let m;
-            while ((m = callPattern.exec(text)) !== null) {
-                const argStart = m.index + m[0].length;
-                let depth = 1;
-                let argEnd = -1;
-                let hasConcat = false;
-                for (let i = argStart; i < text.length; i++) {
-                    const ch = text[i];
-                    if (ch === '\'' || ch === '"') { i = skipStringLiteral(text, i); continue; }
-                    if (ch === '(') { depth++; continue; }
-                    if (ch === ')') {
-                        depth--;
-                        if (depth === 0) { argEnd = i; break; }
-                        continue;
-                    }
-                    if (ch === '+') hasConcat = true;
-                }
-                if (argEnd === -1 || !hasConcat) continue;
+            for (const call of findDynamicQueryCalls(text)) {
+                if (call.kind !== 'soql') continue;
+                if (call.argEnd === -1 || !hasUnquotedPlus(call.argText)) continue;
                 findings.push({
                     ruleId: 'security/dynamic-soql-concat',
                     category: 'security',
-                    message: 'Database.query() argument uses string concatenation — this is a SOQL injection risk. Use bind variables instead.',
-                    start: m.index,
-                    end: argEnd + 1,
+                    message: `${call.method}() argument uses string concatenation — this is a SOQL injection risk. Use bind variables instead.`,
+                    start: call.callStart,
+                    end: call.argEnd + 1,
                     type: 'dynamic-soql',
                     objects: []
                 });
@@ -674,25 +725,14 @@ const RULES = [
         category: 'governor',
         check(text) {
             const findings = [];
-            const callPattern = /Database\s*\.\s*query\s*\(/gi;
-            let m;
-            while ((m = callPattern.exec(text)) !== null) {
-                const argStart = m.index + m[0].length;
-                let depth = 1;
-                let argEnd = argStart;
-                for (let i = argStart; i < text.length; i++) {
-                    if (text[i] === '(') depth++;
-                    else if (text[i] === ')') {
-                        depth--;
-                        if (depth === 0) { argEnd = i; break; }
-                    }
-                }
+            for (const call of findDynamicQueryCalls(text)) {
+                if (call.kind !== 'soql') continue;
                 findings.push({
                     ruleId: 'governor/dynamic-soql-call',
                     category: 'governor',
-                    message: 'Database.query() call detected — dynamic SOQL bypasses bracket-query detection and still counts against the 100 SOQL governor limit.',
-                    start: m.index,
-                    end: argEnd + 1,
+                    message: `${call.method}() is a dynamic SOQL call — it bypasses bracket-query detection and still counts against the 100 SOQL queries governor limit.`,
+                    start: call.callStart,
+                    end: (call.argEnd === -1 ? text.length : call.argEnd + 1),
                     type: 'dynamic-soql',
                     objects: []
                 });
@@ -705,25 +745,14 @@ const RULES = [
         category: 'governor',
         check(text) {
             const findings = [];
-            const callPattern = /(?:Search\s*\.\s*query|Database\s*\.\s*search)\s*\(/gi;
-            let m;
-            while ((m = callPattern.exec(text)) !== null) {
-                const argStart = m.index + m[0].length;
-                let depth = 1;
-                let argEnd = argStart;
-                for (let i = argStart; i < text.length; i++) {
-                    if (text[i] === '(') depth++;
-                    else if (text[i] === ')') {
-                        depth--;
-                        if (depth === 0) { argEnd = i; break; }
-                    }
-                }
+            for (const call of findDynamicQueryCalls(text)) {
+                if (call.kind !== 'sosl') continue;
                 findings.push({
                     ruleId: 'governor/dynamic-sosl-call',
                     category: 'governor',
-                    message: 'Dynamic SOSL call detected — Search.query() / Database.search() bypasses bracket-query detection and still counts against governor limits.',
-                    start: m.index,
-                    end: argEnd + 1,
+                    message: `${call.method}() is a dynamic SOSL call — it bypasses bracket-query detection and still counts against governor limits.`,
+                    start: call.callStart,
+                    end: (call.argEnd === -1 ? text.length : call.argEnd + 1),
                     type: 'dynamic-sosl',
                     objects: []
                 });
@@ -928,6 +957,8 @@ module.exports = {
     collectSuppressions,
     isCollectionType,
     getAssignmentContext,
+    findDynamicQueryCalls,
+    hasUnquotedPlus,
     extractSoqlObjects,
     extractSoslObjects,
     findQueries,
