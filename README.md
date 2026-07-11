@@ -167,6 +167,8 @@ Beyond the per-category toggles, `apexQueryValidator.rules` overrides individual
 
 ## Commands
 
+Both commands are grouped under the **Apex Query Validator** category in the Command Palette. Tip: type **`aqv`** (matching the **A**pex **Q**uery **V**alidator initials) — or "Apex Query" — to surface them quickly.
+
 | Command | Description |
 |---|---|
 | **Apex Query Validator: Validate SOQL/SOSL** | Validates the currently active editor file. |

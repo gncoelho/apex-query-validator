@@ -14,6 +14,30 @@ suite('Extension Test Suite', () => {
         assert.ok(commands.includes('apex-query-validator.validateSoqlSosl'));
     });
 
+    // --- command manifest (Command Palette discoverability) ---
+
+    suite('command manifest', () => {
+        const pkg = require('../package.json');
+
+        test('every contributed command uses the "Apex Query Validator" category', () => {
+            const commands = pkg.contributes.commands;
+            assert.ok(Array.isArray(commands) && commands.length >= 2);
+            for (const c of commands) {
+                assert.strictEqual(c.category, 'Apex Query Validator', `${c.command} should carry the palette category`);
+            }
+        });
+
+        test('command ids are unchanged (no behavior break)', () => {
+            const ids = pkg.contributes.commands.map(c => c.command);
+            assert.ok(ids.includes('apex-query-validator.validateSoqlSosl'));
+            assert.ok(ids.includes('apex-query-validator.validateWorkspace'));
+        });
+
+        test('displayName is the human-readable "Apex Query Validator"', () => {
+            assert.strictEqual(pkg.displayName, 'Apex Query Validator');
+        });
+    });
+
     test('shows an error message when there is no active editor', async () => {
         await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 

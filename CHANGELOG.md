@@ -13,6 +13,7 @@
 - Added **per-rule overrides** via `apexQueryValidator.rules` (`off`/`information`/`warning`/`error`); each finding now carries its rule id as the diagnostic `code`.
 - Added **Quick Fixes**: add `LIMIT`/`LIMIT 1`, add `WITH SECURITY_ENFORCED`, wrap in `String.escapeSingleQuotes()`, extract a hardcoded Id to a constant, replace deprecated `SIDEBAR`, and generate a DAO method + call (new setting `apexQueryValidator.quickFixLimit`).
 - Tightened `security/hardcoded-id` to require a digit in the Id key prefix, and fixed the summary popup to count dynamic queries.
+- Grouped both commands under an **Apex Query Validator** Command Palette category (type `aqv` to find them) and set a human-readable extension `displayName`.
 
 ### v0.2.0
 

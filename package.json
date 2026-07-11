@@ -1,6 +1,6 @@
 {
   "name": "apex-query-validator",
-  "displayName": "apex-query-validator",
+  "displayName": "Apex Query Validator",
   "description": "Validating SOQL/SOSL Queries in Apex Classes Without 'DAO' or 'Test' in Name",
   "version": "0.3.0",
   "publisher": "gncoelho",
@@ -25,11 +25,13 @@
     "commands": [
       {
         "command": "apex-query-validator.validateSoqlSosl",
-        "title": "Validate SOQL/SOSL"
+        "title": "Validate SOQL/SOSL",
+        "category": "Apex Query Validator"
       },
       {
         "command": "apex-query-validator.validateWorkspace",
-        "title": "Validate Whole Project (SOQL/SOSL)"
+        "title": "Validate Whole Project (SOQL/SOSL)",
+        "category": "Apex Query Validator"
       }
     ],
     "configuration": {
