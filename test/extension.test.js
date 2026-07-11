@@ -1,7 +1,7 @@
 const assert = require('assert');
 const vscode = require('vscode');
 const { buildWorkspaceSummaryMessage } = require('../validator');
-const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity } = require('../extension');
+const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES } = require('../extension');
 
 suite('Extension Test Suite', () => {
     suiteSetup(async () => {
@@ -136,6 +136,32 @@ suite('Extension Test Suite', () => {
 
     test('shouldClearOnClose returns true when the tracked set is empty', () => {
         assert.strictEqual(shouldClearOnClose('file:///a.cls', new Set()), true);
+    });
+
+    // --- Quick Fix tests ---
+
+    suite('diagnosticRuleId', () => {
+        test('reads a plain string code', () => {
+            assert.strictEqual(diagnosticRuleId({ code: 'style/sosl-sidebar-scope' }), 'style/sosl-sidebar-scope');
+        });
+
+        test('reads the value of an object code', () => {
+            assert.strictEqual(diagnosticRuleId({ code: { value: 'perf/missing-limit', target: 'x' } }), 'perf/missing-limit');
+        });
+    });
+
+    suite('QUICK_FIXES', () => {
+        test('style/sosl-sidebar-scope replaces SIDEBAR with ALL', () => {
+            const uri = vscode.Uri.file('/fake/Foo.cls');
+            const range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 28));
+            const doc = { uri, getText: () => '[FIND "x" IN SIDEBAR FIELDS]' };
+            const diag = new vscode.Diagnostic(range, 'msg', vscode.DiagnosticSeverity.Information);
+            const actions = QUICK_FIXES['style/sosl-sidebar-scope'](doc, diag);
+            assert.strictEqual(actions.length, 1);
+            assert.ok(actions[0].title.includes('ALL'));
+            const edits = actions[0].edit.get(uri);
+            assert.strictEqual(edits[0].newText, '[FIND "x" IN ALL FIELDS]');
+        });
     });
 
     // --- resolveSeverity tests ---

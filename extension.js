@@ -236,39 +236,80 @@ async function findDaoFilesForObjects(objectNames, { daoKeywords, includeGlobs }
     return results;
 }
 
-class DaoSuggestionProvider {
+// Extracts the rule id carried on a diagnostic's `code` (string or {value}).
+function diagnosticRuleId(diagnostic) {
+    const code = diagnostic.code;
+    return (code && typeof code === 'object') ? code.value : code;
+}
+
+// Builds a single-range text-replacement Quick Fix.
+function makeReplaceAction(title, document, range, newText, diagnostic) {
+    const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+    action.edit = new vscode.WorkspaceEdit();
+    action.edit.replace(document.uri, range, newText);
+    action.diagnostics = [diagnostic];
+    return action;
+}
+
+// Registry of per-rule Quick Fixes, keyed by rule id. Each factory returns
+// CodeAction[] for a single diagnostic. Exported for testing.
+const QUICK_FIXES = {
+    'style/sosl-sidebar-scope': (document, diagnostic) => {
+        const text = document.getText(diagnostic.range);
+        const replaced = text.replace(/\bSIDEBAR\b/i, 'ALL');
+        if (replaced === text) return [];
+        return [makeReplaceAction('Replace SIDEBAR with ALL FIELDS', document, diagnostic.range, replaced, diagnostic)];
+    }
+};
+
+class QueryQuickFixProvider {
     async provideCodeActions(document, _range, context) {
         const ourDiagnostics = context.diagnostics.filter(d => d.source === 'apexQueryValidator');
         if (!ourDiagnostics.length) return [];
 
-        const { daoKeywords, includeGlobs } = getConfig();
         const actions = [];
-        const suggestedUris = new Set();
 
+        // Registered per-rule Quick Fixes.
         for (const diagnostic of ourDiagnostics) {
-            const queryText = document.getText(diagnostic.range);
-            const objects = [
-                ...extractSoqlObjects(queryText),
-                ...extractSoslObjects(queryText)
-            ];
-
-            const daoUris = await findDaoFilesForObjects(objects, { daoKeywords, includeGlobs });
-
-            for (const uri of daoUris) {
-                const uriKey = uri.toString();
-                if (suggestedUris.has(uriKey)) continue;
-                suggestedUris.add(uriKey);
-
-                const label = path.basename(uri.fsPath);
-                const action = new vscode.CodeAction(`Open ${label}`, vscode.CodeActionKind.QuickFix);
-                action.command = { command: 'vscode.open', title: `Open ${label}`, arguments: [uri] };
-                action.diagnostics = [diagnostic];
-                actions.push(action);
-            }
+            const factory = QUICK_FIXES[diagnosticRuleId(diagnostic)];
+            if (factory) actions.push(...factory(document, diagnostic));
         }
+
+        // DAO navigation suggestions (existing behavior).
+        actions.push(...await buildDaoNavigationActions(document, ourDiagnostics));
 
         return actions;
     }
+}
+
+async function buildDaoNavigationActions(document, ourDiagnostics) {
+    const { daoKeywords, includeGlobs } = getConfig();
+    const actions = [];
+    const suggestedUris = new Set();
+
+    for (const diagnostic of ourDiagnostics) {
+        const queryText = document.getText(diagnostic.range);
+        const objects = [
+            ...extractSoqlObjects(queryText),
+            ...extractSoslObjects(queryText)
+        ];
+
+        const daoUris = await findDaoFilesForObjects(objects, { daoKeywords, includeGlobs });
+
+        for (const uri of daoUris) {
+            const uriKey = uri.toString();
+            if (suggestedUris.has(uriKey)) continue;
+            suggestedUris.add(uriKey);
+
+            const label = path.basename(uri.fsPath);
+            const action = new vscode.CodeAction(`Open ${label}`, vscode.CodeActionKind.QuickFix);
+            action.command = { command: 'vscode.open', title: `Open ${label}`, arguments: [uri] };
+            action.diagnostics = [diagnostic];
+            actions.push(action);
+        }
+    }
+
+    return actions;
 }
 
 function activate(context) {
@@ -299,7 +340,7 @@ function activate(context) {
 
     const daoProviderDisposable = vscode.languages.registerCodeActionsProvider(
         [{ scheme: 'file', pattern: '**/*.cls' }, { scheme: 'file', pattern: '**/*.trigger' }],
-        new DaoSuggestionProvider(),
+        new QueryQuickFixProvider(),
         { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
     );
     context.subscriptions.push(daoProviderDisposable);
@@ -326,5 +367,7 @@ module.exports = {
     deactivate,
     shouldClearOnClose,
     findDaoFilesForObjects,
-    resolveSeverity
+    resolveSeverity,
+    diagnosticRuleId,
+    QUICK_FIXES
 };
