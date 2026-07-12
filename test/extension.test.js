@@ -1,7 +1,7 @@
 const assert = require('assert');
 const vscode = require('vscode');
-const { buildWorkspaceSummaryMessage } = require('../validator');
-const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction, getMetadataIndex, invalidateMetadataIndex } = require('../extension');
+const { buildWorkspaceSummaryMessage, buildWorkspaceCancelledMessage, getRuleCategories } = require('../validator');
+const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction, getMetadataIndex, invalidateMetadataIndex, CATEGORY_LABELS } = require('../extension');
 
 suite('Extension Test Suite', () => {
     suiteSetup(async () => {
@@ -12,6 +12,123 @@ suite('Extension Test Suite', () => {
     test('registers the validateSoqlSosl command on activation', async () => {
         const commands = await vscode.commands.getCommands(true);
         assert.ok(commands.includes('apex-query-validator.validateSoqlSosl'));
+    });
+
+    // --- command manifest (Command Palette discoverability) ---
+
+    suite('command manifest', () => {
+        const pkg = require('../package.json');
+
+        test('every contributed command uses the "Apex Query Validator" category', () => {
+            const commands = pkg.contributes.commands;
+            assert.ok(Array.isArray(commands) && commands.length >= 2);
+            for (const c of commands) {
+                assert.strictEqual(c.category, 'Apex Query Validator', `${c.command} should carry the palette category`);
+            }
+        });
+
+        test('command ids are unchanged (no behavior break)', () => {
+            const ids = pkg.contributes.commands.map(c => c.command);
+            assert.ok(ids.includes('apex-query-validator.validateSoqlSosl'));
+            assert.ok(ids.includes('apex-query-validator.validateWorkspace'));
+        });
+
+        test('displayName is the human-readable "Apex Query Validator"', () => {
+            assert.strictEqual(pkg.displayName, 'Apex Query Validator');
+        });
+
+        test('declares a per-category command and a label for every rule category', () => {
+            const ids = pkg.contributes.commands.map(c => c.command);
+            for (const key of getRuleCategories()) {
+                assert.ok(ids.includes(`apex-query-validator.validate.${key}`), `missing command for ${key}`);
+                assert.ok(CATEGORY_LABELS[key], `missing CATEGORY_LABELS entry for ${key}`);
+            }
+        });
+
+        test('declares the "Run a Validation…" menu command', () => {
+            const ids = pkg.contributes.commands.map(c => c.command);
+            assert.ok(ids.includes('apex-query-validator.runValidation'));
+        });
+    });
+
+    suite('per-category / menu validation', () => {
+        test('registers a per-category command for every rule category', async () => {
+            const commands = await vscode.commands.getCommands(true);
+            for (const key of getRuleCategories()) {
+                assert.ok(commands.includes(`apex-query-validator.validate.${key}`), `unregistered command for ${key}`);
+            }
+            assert.ok(commands.includes('apex-query-validator.runValidation'));
+        });
+
+        test('a per-category command errors with no active editor', async () => {
+            await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+            const orig = vscode.window.showErrorMessage;
+            let captured;
+            vscode.window.showErrorMessage = (msg) => { captured = msg; };
+            try {
+                await vscode.commands.executeCommand('apex-query-validator.validate.security');
+                assert.strictEqual(captured, 'No active editor!');
+            } finally {
+                vscode.window.showErrorMessage = orig;
+            }
+        });
+
+        test('menu: Performance over the whole project sets only perf diagnostics', async () => {
+            const fakeUri = vscode.Uri.file('/fake/MenuPerf.cls');
+            const fakeDoc = {
+                getText: () => 'Account a = [SELECT Id FROM Account];',
+                fileName: fakeUri.fsPath, uri: fakeUri, positionAt: (o) => new vscode.Position(0, o)
+            };
+
+            const origFindFiles = vscode.workspace.findFiles;
+            const origOpenDoc = vscode.workspace.openTextDocument;
+            const origWithProgress = vscode.window.withProgress;
+            const origShowInfo = vscode.window.showInformationMessage;
+            const origQuickPick = vscode.window.showQuickPick;
+
+            vscode.workspace.findFiles = async () => [fakeUri];
+            vscode.workspace.openTextDocument = async () => fakeDoc;
+            vscode.window.withProgress = async (_opts, task) => task({ report: () => {} });
+            vscode.window.showInformationMessage = () => {};
+            let qpCall = 0;
+            vscode.window.showQuickPick = async (items) => {
+                qpCall++;
+                return qpCall === 1
+                    ? items.find(i => i.categoryKey === 'performance')
+                    : items.find(i => i.scope === 'workspace');
+            };
+
+            try {
+                await vscode.commands.executeCommand('apex-query-validator.runValidation');
+                const diags = vscode.languages.getDiagnostics(fakeUri);
+                assert.ok(diags.length > 0, 'expected performance findings');
+                for (const d of diags) {
+                    const code = typeof d.code === 'object' ? d.code.value : d.code;
+                    assert.ok(String(code).startsWith('perf/'), `unexpected non-perf finding: ${code}`);
+                }
+            } finally {
+                vscode.workspace.findFiles = origFindFiles;
+                vscode.workspace.openTextDocument = origOpenDoc;
+                vscode.window.withProgress = origWithProgress;
+                vscode.window.showInformationMessage = origShowInfo;
+                vscode.window.showQuickPick = origQuickPick;
+            }
+        });
+
+        test('menu: cancelling the first Quick Pick does nothing', async () => {
+            const origQuickPick = vscode.window.showQuickPick;
+            const origFindFiles = vscode.workspace.findFiles;
+            let findFilesCalled = false;
+            vscode.window.showQuickPick = async () => undefined; // user pressed Esc
+            vscode.workspace.findFiles = async () => { findFilesCalled = true; return []; };
+            try {
+                await vscode.commands.executeCommand('apex-query-validator.runValidation');
+                assert.strictEqual(findFilesCalled, false, 'no validation should run when the pick is dismissed');
+            } finally {
+                vscode.window.showQuickPick = origQuickPick;
+                vscode.workspace.findFiles = origFindFiles;
+            }
+        });
     });
 
     test('shows an error message when there is no active editor', async () => {
@@ -79,6 +196,75 @@ suite('Extension Test Suite', () => {
             await vscode.commands.executeCommand('apex-query-validator.validateWorkspace');
             const diagnostics = vscode.languages.getDiagnostics(fakeUri);
             assert.ok(diagnostics.length > 0, 'Expected diagnostics to be set for the discovered file');
+        } finally {
+            vscode.workspace.findFiles = origFindFiles;
+            vscode.workspace.openTextDocument = origOpenDoc;
+            vscode.window.withProgress = origWithProgress;
+            vscode.window.showInformationMessage = origShowInfo;
+        }
+    });
+
+    test('validateWorkspace reports cancellation and scans nothing when cancelled up front', async () => {
+        const fileA = vscode.Uri.file('/fake/CancelA.cls');
+        const fileB = vscode.Uri.file('/fake/CancelB.cls');
+        const docFor = (uri) => ({
+            getText: () => '[SELECT Id FROM Account]',
+            fileName: uri.fsPath, uri, positionAt: (o) => new vscode.Position(0, o)
+        });
+
+        const origFindFiles = vscode.workspace.findFiles;
+        const origOpenDoc = vscode.workspace.openTextDocument;
+        const origWithProgress = vscode.window.withProgress;
+        const origShowInfo = vscode.window.showInformationMessage;
+        let capturedMessage;
+        let openedCount = 0;
+
+        vscode.workspace.findFiles = async () => [fileA, fileB];
+        vscode.workspace.openTextDocument = async (uri) => { openedCount++; return docFor(uri); };
+        vscode.window.withProgress = async (_opts, task) => task({ report: () => {} }, { isCancellationRequested: true });
+        vscode.window.showInformationMessage = (msg) => { capturedMessage = msg; };
+
+        try {
+            await vscode.commands.executeCommand('apex-query-validator.validateWorkspace');
+            assert.strictEqual(openedCount, 0, 'no files should be opened when cancelled before the loop');
+            assert.strictEqual(capturedMessage, buildWorkspaceCancelledMessage(0, 0, 0));
+        } finally {
+            vscode.workspace.findFiles = origFindFiles;
+            vscode.workspace.openTextDocument = origOpenDoc;
+            vscode.window.withProgress = origWithProgress;
+            vscode.window.showInformationMessage = origShowInfo;
+        }
+    });
+
+    test('validateWorkspace keeps partial results when cancelled after one file', async () => {
+        const fileA = vscode.Uri.file('/fake/PartA.cls');
+        const fileB = vscode.Uri.file('/fake/PartB.cls');
+        const docFor = (uri) => ({
+            getText: () => '[SELECT Id FROM Account]',
+            fileName: uri.fsPath, uri, positionAt: (o) => new vscode.Position(0, o)
+        });
+
+        // Cancel is requested only from the second check onward, so file A is
+        // processed and file B is skipped.
+        let checks = 0;
+        const token = { get isCancellationRequested() { return checks++ >= 1; } };
+
+        const origFindFiles = vscode.workspace.findFiles;
+        const origOpenDoc = vscode.workspace.openTextDocument;
+        const origWithProgress = vscode.window.withProgress;
+        const origShowInfo = vscode.window.showInformationMessage;
+        let capturedMessage;
+
+        vscode.workspace.findFiles = async () => [fileA, fileB];
+        vscode.workspace.openTextDocument = async (uri) => docFor(uri);
+        vscode.window.withProgress = async (_opts, task) => task({ report: () => {} }, token);
+        vscode.window.showInformationMessage = (msg) => { capturedMessage = msg; };
+
+        try {
+            await vscode.commands.executeCommand('apex-query-validator.validateWorkspace');
+            assert.ok(vscode.languages.getDiagnostics(fileA).length > 0, 'file A partial results should be kept');
+            assert.strictEqual(vscode.languages.getDiagnostics(fileB).length, 0, 'file B should not be processed');
+            assert.ok(/cancel/i.test(capturedMessage), 'message should indicate cancellation');
         } finally {
             vscode.workspace.findFiles = origFindFiles;
             vscode.workspace.openTextDocument = origOpenDoc;

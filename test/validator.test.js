@@ -29,7 +29,12 @@ const {
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
-    buildWorkspaceSummaryMessage
+    buildWorkspaceSummaryMessage,
+    buildWorkspaceCancelledMessage,
+    getRuleCategories,
+    buildSingleCategoryMap,
+    buildCategorySummaryMessage,
+    buildCategoryCancelledMessage
 } = require('../validator');
 
 suite('validator', () => {
@@ -275,6 +280,100 @@ suite('validator', () => {
 
         test('uses singular "file" for count of 1', () => {
             assert.ok(buildWorkspaceSummaryMessage(1, 0, 0).includes('1 file scanned'));
+        });
+    });
+
+    suite('getRuleCategories', () => {
+        test('returns the seven categories in RULES order', () => {
+            assert.deepStrictEqual(
+                getRuleCategories(),
+                ['dao', 'correctness', 'performance', 'security', 'style', 'governor', 'metadata']
+            );
+        });
+
+        test('has no duplicates', () => {
+            const cats = getRuleCategories();
+            assert.strictEqual(cats.length, new Set(cats).size);
+        });
+    });
+
+    suite('buildSingleCategoryMap', () => {
+        test('enables only the requested category', () => {
+            const map = buildSingleCategoryMap('security');
+            assert.strictEqual(map.security, true);
+            assert.strictEqual(map.performance, false);
+            assert.strictEqual(map.dao, false);
+        });
+
+        test('includes every known category as a key', () => {
+            const map = buildSingleCategoryMap('performance');
+            for (const key of getRuleCategories()) {
+                assert.ok(Object.prototype.hasOwnProperty.call(map, key), `missing ${key}`);
+            }
+        });
+
+        test('an unknown key disables everything', () => {
+            const map = buildSingleCategoryMap('nope');
+            assert.ok(getRuleCategories().every(k => map[k] === false));
+        });
+    });
+
+    suite('buildCategorySummaryMessage', () => {
+        test('names the category and reports findings and file count', () => {
+            const msg = buildCategorySummaryMessage('Security', 3, 5);
+            assert.ok(msg.includes('Security validation'));
+            assert.ok(msg.includes('5 findings'));
+            assert.ok(msg.includes('3 files'));
+        });
+
+        test('uses singular finding/file wording', () => {
+            const msg = buildCategorySummaryMessage('Performance', 1, 1);
+            assert.ok(msg.includes('1 finding'));
+            assert.ok(!/1 findings/.test(msg));
+            assert.ok(msg.includes('1 file'));
+        });
+
+        test('reports "no findings" when total is zero', () => {
+            assert.ok(buildCategorySummaryMessage('Style', 4, 0).includes('no findings'));
+        });
+    });
+
+    suite('buildCategoryCancelledMessage', () => {
+        test('states cancellation with partial counts', () => {
+            const msg = buildCategoryCancelledMessage('Metadata', 2, 3);
+            assert.ok(/cancel/i.test(msg));
+            assert.ok(msg.includes('Metadata validation'));
+            assert.ok(msg.includes('3 findings'));
+            assert.ok(msg.includes('so far'));
+        });
+
+        test('handles zero findings so far', () => {
+            assert.ok(buildCategoryCancelledMessage('Security', 1, 0).includes('no findings'));
+        });
+    });
+
+    suite('buildWorkspaceCancelledMessage', () => {
+        test('states the run was cancelled and how many files were scanned', () => {
+            const msg = buildWorkspaceCancelledMessage(3, 0, 0);
+            assert.ok(/cancel/i.test(msg));
+            assert.ok(msg.includes('3 files scanned'));
+        });
+
+        test('reports partial SOQL/SOSL counts with "so far" wording', () => {
+            const msg = buildWorkspaceCancelledMessage(2, 4, 1);
+            assert.ok(msg.includes('4 SOQL'));
+            assert.ok(msg.includes('1 SOSL'));
+            assert.ok(msg.includes('so far'));
+        });
+
+        test('uses singular "file" for a count of 1', () => {
+            assert.ok(buildWorkspaceCancelledMessage(1, 0, 0).includes('1 file scanned'));
+        });
+
+        test('reports no queries found so far when counts are zero', () => {
+            const msg = buildWorkspaceCancelledMessage(5, 0, 0);
+            assert.ok(msg.includes('No SOQL queries found so far'));
+            assert.ok(msg.includes('No SOSL queries found so far'));
         });
     });
 

@@ -1309,6 +1309,53 @@ function buildWorkspaceSummaryMessage(fileCount, soqlCount, soslCount) {
     return `${filePart} ${soqlPart} ${soslPart}`;
 }
 
+// Returns the distinct rule categories, in RULES-registry order. Single source
+// of truth for the per-category commands and the "Run a Validation…" menu.
+function getRuleCategories() {
+    const seen = new Set();
+    const order = [];
+    for (const rule of RULES) {
+        if (!seen.has(rule.category)) { seen.add(rule.category); order.push(rule.category); }
+    }
+    return order;
+}
+
+// Builds an enabledCategories map for runRules with only `categoryKey` enabled.
+function buildSingleCategoryMap(categoryKey) {
+    const map = {};
+    for (const key of getRuleCategories()) map[key] = (key === categoryKey);
+    return map;
+}
+
+// Summary for a single-category run (file: fileCount 1; workspace: files scanned).
+function buildCategorySummaryMessage(categoryLabel, fileCount, total) {
+    const files = `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`;
+    const findings = total === 1 ? '1 finding' : `${total} findings`;
+    return total === 0
+        ? `${categoryLabel} validation: no findings in ${files}.`
+        : `${categoryLabel} validation: ${findings} in ${files}.`;
+}
+
+// Summary when a single-category whole-project run is cancelled partway through.
+function buildCategoryCancelledMessage(categoryLabel, fileCount, total) {
+    const files = `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`;
+    const findings = total === 1 ? '1 finding' : `${total} findings`;
+    return `${categoryLabel} validation cancelled after ${files} — ${total === 0 ? 'no findings' : findings} so far.`;
+}
+
+// Summary shown when a whole-project validation is cancelled partway through.
+// Partial results for the files already scanned are kept in the Problems panel.
+function buildWorkspaceCancelledMessage(fileCount, soqlCount, soslCount) {
+    const filePart = `Validation cancelled after ${fileCount} ${fileCount === 1 ? 'file' : 'files'} scanned.`;
+    const soqlPart = soqlCount > 0
+        ? `${soqlCount} SOQL ${soqlCount === 1 ? 'query' : 'queries'} found so far.`
+        : 'No SOQL queries found so far.';
+    const soslPart = soslCount > 0
+        ? `${soslCount} SOSL ${soslCount === 1 ? 'query' : 'queries'} found so far.`
+        : 'No SOSL queries found so far.';
+    return `${filePart} ${soqlPart} ${soslPart}`;
+}
+
 module.exports = {
     SOQL_PATTERN,
     SOSL_PATTERN,
@@ -1345,5 +1392,10 @@ module.exports = {
     globToRegExp,
     matchesGlob,
     buildSummaryMessage,
-    buildWorkspaceSummaryMessage
+    buildWorkspaceSummaryMessage,
+    buildWorkspaceCancelledMessage,
+    getRuleCategories,
+    buildSingleCategoryMap,
+    buildCategorySummaryMessage,
+    buildCategoryCancelledMessage
 };

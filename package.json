@@ -1,8 +1,8 @@
 {
   "name": "apex-query-validator",
-  "displayName": "apex-query-validator",
+  "displayName": "Apex Query Validator",
   "description": "Validating SOQL/SOSL Queries in Apex Classes Without 'DAO' or 'Test' in Name",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "gncoelho",
   "icon": "apex-query-validator.jpg",
   "license": "CC-BY-NC-4.0",
@@ -25,11 +25,53 @@
     "commands": [
       {
         "command": "apex-query-validator.validateSoqlSosl",
-        "title": "Validate SOQL/SOSL"
+        "title": "Validate SOQL/SOSL",
+        "category": "Apex Query Validator"
       },
       {
         "command": "apex-query-validator.validateWorkspace",
-        "title": "Validate Whole Project (SOQL/SOSL)"
+        "title": "Validate Whole Project (SOQL/SOSL)",
+        "category": "Apex Query Validator"
+      },
+      {
+        "command": "apex-query-validator.runValidation",
+        "title": "Run a Validation…",
+        "category": "Apex Query Validator"
+      },
+      {
+        "command": "apex-query-validator.validate.dao",
+        "title": "Validate DAO Placement",
+        "category": "Apex Query Validator"
+      },
+      {
+        "command": "apex-query-validator.validate.correctness",
+        "title": "Validate Correctness",
+        "category": "Apex Query Validator"
+      },
+      {
+        "command": "apex-query-validator.validate.performance",
+        "title": "Validate Performance",
+        "category": "Apex Query Validator"
+      },
+      {
+        "command": "apex-query-validator.validate.security",
+        "title": "Validate Security",
+        "category": "Apex Query Validator"
+      },
+      {
+        "command": "apex-query-validator.validate.style",
+        "title": "Validate Style",
+        "category": "Apex Query Validator"
+      },
+      {
+        "command": "apex-query-validator.validate.governor",
+        "title": "Validate Governor Limits",
+        "category": "Apex Query Validator"
+      },
+      {
+        "command": "apex-query-validator.validate.metadata",
+        "title": "Validate Metadata",
+        "category": "Apex Query Validator"
       }
     ],
     "configuration": {

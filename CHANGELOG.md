@@ -1,5 +1,11 @@
 # Change Log
 
+### v0.4.0
+
+- Whole-project validation is now **cancellable** — a Cancel button on the progress notification stops the scan; diagnostics for files already scanned are kept.
+- Grouped all commands under an **Apex Query Validator** Command Palette category (type `aqv` to find them) and set a human-readable extension `displayName`.
+- Added the ability to **run a single validation category** (Correctness, Performance, Security, Style, Governor, Metadata, DAO placement): one per-category command each (active file) plus a **Run a Validation…** menu that also runs a category across the whole project. A focused run shows only that category's findings.
+
 ### v0.3.0
 
 - Added two new rule categories:
