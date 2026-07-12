@@ -14,6 +14,7 @@
 - Added **Quick Fixes**: add `LIMIT`/`LIMIT 1`, add `WITH SECURITY_ENFORCED`, wrap in `String.escapeSingleQuotes()`, extract a hardcoded Id to a constant, replace deprecated `SIDEBAR`, and generate a DAO method + call (new setting `apexQueryValidator.quickFixLimit`).
 - Tightened `security/hardcoded-id` to require a digit in the Id key prefix, and fixed the summary popup to count dynamic queries.
 - Grouped both commands under an **Apex Query Validator** Command Palette category (type `aqv` to find them) and set a human-readable extension `displayName`.
+- Added the ability to **run a single validation category** (Correctness, Performance, Security, Style, Governor, Metadata, DAO placement): one per-category command each (active file) plus a **Run a Validation…** menu that also runs a category across the whole project. A focused run shows only that category's findings.
 
 ### v0.2.0
 

@@ -3,8 +3,20 @@ const path = require('path');
 const {
     runRules, isExemptFile, isDaoFile, extractSoqlObjects, extractSoslObjects,
     matchesGlob, buildSummaryMessage, buildWorkspaceSummaryMessage, buildWorkspaceCancelledMessage,
-    splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod, buildMetadataIndex, countQueriesByType
+    splitTopLevelConcat, isConcatSegmentSafe, buildDaoMethod, buildMetadataIndex, countQueriesByType,
+    getRuleCategories, buildSingleCategoryMap, buildCategorySummaryMessage, buildCategoryCancelledMessage
 } = require('./validator');
+
+// Human-readable labels for each rule category (keys come from getRuleCategories()).
+const CATEGORY_LABELS = {
+    dao: 'DAO Placement',
+    correctness: 'Correctness',
+    performance: 'Performance',
+    security: 'Security',
+    style: 'Style',
+    governor: 'Governor Limits',
+    metadata: 'Metadata'
+};
 const { STANDARD_OBJECTS, COMMON_STANDARD_FIELDS } = require('./metadata-baseline');
 
 // Cached offline object/field index, rebuilt lazily and invalidated by a
@@ -110,18 +122,22 @@ function applyDocumentValidation(document, diagnosticCollection, {
     maxSubqueries,
     enforceSecurityClause,
     metadataIndex,
-    ruleOverrides = {}
+    ruleOverrides = {},
+    categoryFilter = null
 }) {
     const text = document.getText();
-    const findings = runRules(text, {
-        dao: true,
-        correctness: enableCorrectnessRules,
-        performance: enablePerformanceRules,
-        security: enableSecurityRules,
-        style: enableStyleRules,
-        governor: enableGovernorRules,
-        metadata: enableMetadataRules
-    }, { maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides });
+    const categories = categoryFilter
+        ? buildSingleCategoryMap(categoryFilter)
+        : {
+            dao: true,
+            correctness: enableCorrectnessRules,
+            performance: enablePerformanceRules,
+            security: enableSecurityRules,
+            style: enableStyleRules,
+            governor: enableGovernorRules,
+            metadata: enableMetadataRules
+        };
+    const findings = runRules(text, categories, { maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides });
 
     const diagnostics = findings.map(({ ruleId, message, start, end, category, severity: findingSeverity }) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(end));
@@ -151,10 +167,16 @@ function applyDocumentValidation(document, diagnosticCollection, {
         })));
     }
 
-    return countQueriesByType(findings);
+    return { ...countQueriesByType(findings), total: findings.length };
 }
 
-async function runValidation(document, diagnosticCollection, { silent }) {
+// True when the metadata index is needed: a targeted metadata run, or an
+// "all rules" run with the metadata category enabled.
+function needsMetadataIndex(categoryFilter, enableMetadataRules) {
+    return categoryFilter ? categoryFilter === 'metadata' : enableMetadataRules;
+}
+
+async function runValidation(document, diagnosticCollection, { silent, categoryFilter = null }) {
     const { exemptKeywords, includeGlobs, severity, autoValidate,
         enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
         maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides } = getConfig();
@@ -176,15 +198,19 @@ async function runValidation(document, diagnosticCollection, { silent }) {
         return;
     }
 
-    const metadataIndex = enableMetadataRules ? await getMetadataIndex() : null;
+    const metadataIndex = needsMetadataIndex(categoryFilter, enableMetadataRules) ? await getMetadataIndex() : null;
 
-    const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
+    const { soqlCount, soslCount, total } = applyDocumentValidation(document, diagnosticCollection, {
         severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
-        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides
+        maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides, categoryFilter
     });
 
     if (!silent) {
-        vscode.window.showInformationMessage(buildSummaryMessage(soqlCount, soslCount));
+        vscode.window.showInformationMessage(
+            categoryFilter
+                ? buildCategorySummaryMessage(CATEGORY_LABELS[categoryFilter], 1, total)
+                : buildSummaryMessage(soqlCount, soslCount)
+        );
     }
 }
 
@@ -194,12 +220,12 @@ function shouldClearOnClose(uriString, workspaceValidatedUris) {
     return !workspaceValidatedUris.has(uriString);
 }
 
-async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
+async function validateWorkspace(diagnosticCollection, workspaceValidatedUris, { categoryFilter = null } = {}) {
     const { exemptKeywords, includeGlobs, severity,
         enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
         maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, ruleOverrides } = getConfig();
 
-    const metadataIndex = enableMetadataRules ? await getMetadataIndex() : null;
+    const metadataIndex = needsMetadataIndex(categoryFilter, enableMetadataRules) ? await getMetadataIndex() : null;
 
     // Reset tracked URIs so a re-run starts clean.
     workspaceValidatedUris.clear();
@@ -214,7 +240,7 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
         }
     }
 
-    let totalSoql = 0, totalSosl = 0, fileCount = 0;
+    let totalSoql = 0, totalSosl = 0, totalFindings = 0, fileCount = 0;
     let cancelled = false;
 
     await vscode.window.withProgress(
@@ -230,24 +256,54 @@ async function validateWorkspace(diagnosticCollection, workspaceValidatedUris) {
                 const document = await vscode.workspace.openTextDocument(uri);
                 if (!matchesGlob(document.fileName, includeGlobs)) continue;
                 if (isExemptFile(document.fileName, exemptKeywords)) continue;
-                const { soqlCount, soslCount } = applyDocumentValidation(document, diagnosticCollection, {
+                const { soqlCount, soslCount, total } = applyDocumentValidation(document, diagnosticCollection, {
                     severity, enableCorrectnessRules, enablePerformanceRules, enableSecurityRules, enableStyleRules, enableGovernorRules, enableMetadataRules,
-                    maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides
+                    maxSelectFields, largeObjects, maxQueriesPerFile, maxSubqueries, enforceSecurityClause, metadataIndex, ruleOverrides, categoryFilter
                 });
                 // Track this URI so onDidCloseTextDocument does not wipe its diagnostics.
                 workspaceValidatedUris.add(uri.toString());
                 totalSoql += soqlCount;
                 totalSosl += soslCount;
+                totalFindings += total;
                 fileCount++;
             }
         }
     );
 
+    const label = categoryFilter ? CATEGORY_LABELS[categoryFilter] : null;
     vscode.window.showInformationMessage(
-        cancelled
-            ? buildWorkspaceCancelledMessage(fileCount, totalSoql, totalSosl)
-            : buildWorkspaceSummaryMessage(fileCount, totalSoql, totalSosl)
+        categoryFilter
+            ? (cancelled
+                ? buildCategoryCancelledMessage(label, fileCount, totalFindings)
+                : buildCategorySummaryMessage(label, fileCount, totalFindings))
+            : (cancelled
+                ? buildWorkspaceCancelledMessage(fileCount, totalSoql, totalSosl)
+                : buildWorkspaceSummaryMessage(fileCount, totalSoql, totalSosl))
     );
+}
+
+// Two-step Quick Pick: pick a validation (a category or "All rules"), then a
+// scope (active file or whole project), then run it. Exported for testing.
+async function runValidationMenu(diagnosticCollection, workspaceValidatedUris) {
+    const categoryItems = [
+        { label: 'All rules', categoryKey: null },
+        ...getRuleCategories().map(key => ({ label: CATEGORY_LABELS[key] || key, categoryKey: key }))
+    ];
+    const categoryPick = await vscode.window.showQuickPick(categoryItems, { placeHolder: 'Select a validation to run' });
+    if (!categoryPick) return;
+
+    const scopePick = await vscode.window.showQuickPick(
+        [{ label: 'Active file', scope: 'file' }, { label: 'Whole project', scope: 'workspace' }],
+        { placeHolder: 'Select scope' }
+    );
+    if (!scopePick) return;
+
+    if (scopePick.scope === 'file') {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) { vscode.window.showErrorMessage('No active editor!'); return; }
+        return runValidation(editor.document, diagnosticCollection, { silent: false, categoryFilter: categoryPick.categoryKey });
+    }
+    return validateWorkspace(diagnosticCollection, workspaceValidatedUris, { categoryFilter: categoryPick.categoryKey });
 }
 
 // Finds DAO files in the workspace whose name contains one of the given SObject names.
@@ -500,6 +556,24 @@ function activate(context) {
     );
     context.subscriptions.push(workspaceDisposable);
 
+    // Per-category "Validate <Category>" commands (active file).
+    for (const key of getRuleCategories()) {
+        context.subscriptions.push(vscode.commands.registerCommand(`apex-query-validator.validate.${key}`, function () {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                vscode.window.showErrorMessage('No active editor!');
+                return;
+            }
+            return runValidation(editor.document, diagnosticCollection, { silent: false, categoryFilter: key });
+        }));
+    }
+
+    // "Run a Validation…" menu command (choose category + scope).
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'apex-query-validator.runValidation',
+        function () { return runValidationMenu(diagnosticCollection, workspaceValidatedUris); }
+    ));
+
     const daoProviderDisposable = vscode.languages.registerCodeActionsProvider(
         [{ scheme: 'file', pattern: '**/*.cls' }, { scheme: 'file', pattern: '**/*.trigger' }],
         new QueryQuickFixProvider(),
@@ -541,5 +615,6 @@ module.exports = {
     QUICK_FIXES,
     buildDaoMethodAction,
     getMetadataIndex,
-    invalidateMetadataIndex
+    invalidateMetadataIndex,
+    CATEGORY_LABELS
 };

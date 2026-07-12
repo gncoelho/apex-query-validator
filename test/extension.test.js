@@ -1,7 +1,7 @@
 const assert = require('assert');
 const vscode = require('vscode');
-const { buildWorkspaceSummaryMessage, buildWorkspaceCancelledMessage } = require('../validator');
-const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction, getMetadataIndex, invalidateMetadataIndex } = require('../extension');
+const { buildWorkspaceSummaryMessage, buildWorkspaceCancelledMessage, getRuleCategories } = require('../validator');
+const { shouldClearOnClose, findDaoFilesForObjects, resolveSeverity, diagnosticRuleId, QUICK_FIXES, buildDaoMethodAction, getMetadataIndex, invalidateMetadataIndex, CATEGORY_LABELS } = require('../extension');
 
 suite('Extension Test Suite', () => {
     suiteSetup(async () => {
@@ -35,6 +35,99 @@ suite('Extension Test Suite', () => {
 
         test('displayName is the human-readable "Apex Query Validator"', () => {
             assert.strictEqual(pkg.displayName, 'Apex Query Validator');
+        });
+
+        test('declares a per-category command and a label for every rule category', () => {
+            const ids = pkg.contributes.commands.map(c => c.command);
+            for (const key of getRuleCategories()) {
+                assert.ok(ids.includes(`apex-query-validator.validate.${key}`), `missing command for ${key}`);
+                assert.ok(CATEGORY_LABELS[key], `missing CATEGORY_LABELS entry for ${key}`);
+            }
+        });
+
+        test('declares the "Run a Validation…" menu command', () => {
+            const ids = pkg.contributes.commands.map(c => c.command);
+            assert.ok(ids.includes('apex-query-validator.runValidation'));
+        });
+    });
+
+    suite('per-category / menu validation', () => {
+        test('registers a per-category command for every rule category', async () => {
+            const commands = await vscode.commands.getCommands(true);
+            for (const key of getRuleCategories()) {
+                assert.ok(commands.includes(`apex-query-validator.validate.${key}`), `unregistered command for ${key}`);
+            }
+            assert.ok(commands.includes('apex-query-validator.runValidation'));
+        });
+
+        test('a per-category command errors with no active editor', async () => {
+            await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+            const orig = vscode.window.showErrorMessage;
+            let captured;
+            vscode.window.showErrorMessage = (msg) => { captured = msg; };
+            try {
+                await vscode.commands.executeCommand('apex-query-validator.validate.security');
+                assert.strictEqual(captured, 'No active editor!');
+            } finally {
+                vscode.window.showErrorMessage = orig;
+            }
+        });
+
+        test('menu: Performance over the whole project sets only perf diagnostics', async () => {
+            const fakeUri = vscode.Uri.file('/fake/MenuPerf.cls');
+            const fakeDoc = {
+                getText: () => 'Account a = [SELECT Id FROM Account];',
+                fileName: fakeUri.fsPath, uri: fakeUri, positionAt: (o) => new vscode.Position(0, o)
+            };
+
+            const origFindFiles = vscode.workspace.findFiles;
+            const origOpenDoc = vscode.workspace.openTextDocument;
+            const origWithProgress = vscode.window.withProgress;
+            const origShowInfo = vscode.window.showInformationMessage;
+            const origQuickPick = vscode.window.showQuickPick;
+
+            vscode.workspace.findFiles = async () => [fakeUri];
+            vscode.workspace.openTextDocument = async () => fakeDoc;
+            vscode.window.withProgress = async (_opts, task) => task({ report: () => {} });
+            vscode.window.showInformationMessage = () => {};
+            let qpCall = 0;
+            vscode.window.showQuickPick = async (items) => {
+                qpCall++;
+                return qpCall === 1
+                    ? items.find(i => i.categoryKey === 'performance')
+                    : items.find(i => i.scope === 'workspace');
+            };
+
+            try {
+                await vscode.commands.executeCommand('apex-query-validator.runValidation');
+                const diags = vscode.languages.getDiagnostics(fakeUri);
+                assert.ok(diags.length > 0, 'expected performance findings');
+                for (const d of diags) {
+                    const code = typeof d.code === 'object' ? d.code.value : d.code;
+                    assert.ok(String(code).startsWith('perf/'), `unexpected non-perf finding: ${code}`);
+                }
+            } finally {
+                vscode.workspace.findFiles = origFindFiles;
+                vscode.workspace.openTextDocument = origOpenDoc;
+                vscode.window.withProgress = origWithProgress;
+                vscode.window.showInformationMessage = origShowInfo;
+                vscode.window.showQuickPick = origQuickPick;
+            }
+        });
+
+        test('menu: cancelling the first Quick Pick does nothing', async () => {
+            const origQuickPick = vscode.window.showQuickPick;
+            const origFindFiles = vscode.workspace.findFiles;
+            let findFilesCalled = false;
+            vscode.window.showQuickPick = async () => undefined; // user pressed Esc
+            vscode.workspace.findFiles = async () => { findFilesCalled = true; return []; };
+            try {
+                await vscode.commands.executeCommand('apex-query-validator.runValidation');
+                assert.strictEqual(findFilesCalled, false, 'no validation should run when the pick is dismissed');
+            } finally {
+                vscode.window.showQuickPick = origQuickPick;
+                vscode.workspace.findFiles = origFindFiles;
+            }
         });
     });
 

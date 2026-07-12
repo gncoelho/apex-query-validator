@@ -99,6 +99,15 @@ These validate names against your project's local SFDX metadata (`objects/**/*.o
 3. All findings are reported in the Problems panel across every matching file.
 4. A summary notification shows how many files were scanned and the total query counts.
 
+### Run a specific validation
+
+You can run a single validation category (e.g. just Security, or just Performance) instead of all rules:
+
+- **Per-category commands** — the Command Palette offers one command per category on the **active file**: **Apex Query Validator: Validate Security**, **… Validate Performance**, **… Validate Correctness**, **… Validate Style**, **… Validate Governor Limits**, **… Validate Metadata**, **… Validate DAO Placement**. Tip: type `aqv security` to jump straight to one.
+- **Run a Validation… menu** — **Apex Query Validator: Run a Validation…** opens a picker to choose a category (or *All rules*), then a scope (*Active file* or *Whole project*). This is how you run a single category across the **whole project**.
+
+A focused run replaces that file's diagnostics with **only** the chosen category's findings, and reports a per-category summary. DAO/test files are still skipped, as with the other commands.
+
 ### DAO Quick Fix
 
 After a query is flagged (by either command or auto-validation):
@@ -171,8 +180,10 @@ Both commands are grouped under the **Apex Query Validator** category in the Com
 
 | Command | Description |
 |---|---|
-| **Apex Query Validator: Validate SOQL/SOSL** | Validates the currently active editor file. |
-| **Apex Query Validator: Validate Whole Project (SOQL/SOSL)** | Scans all matching files in the workspace and reports findings in the Problems panel with an aggregate summary. |
+| **Apex Query Validator: Validate SOQL/SOSL** | Validates the currently active editor file (all rules). |
+| **Apex Query Validator: Validate Whole Project (SOQL/SOSL)** | Scans all matching files in the workspace (all rules) and reports findings with an aggregate summary. |
+| **Apex Query Validator: Run a Validation…** | Pick a category (or *All rules*) and a scope (*Active file* / *Whole project*), then run just that validation. |
+| **Apex Query Validator: Validate `<Category>`** | Runs a single category on the active file — one command each for DAO Placement, Correctness, Performance, Security, Style, Governor Limits, and Metadata. |
 
 ## Settings
 
